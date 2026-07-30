@@ -1,20 +1,24 @@
-# Phase 1 — DEFEX-safe runtime relocation
+# Phase 1 — DEFEX-safe tmpfs runtime relocation
 
 ## Goal
 
-Relocate NeoZygisk's runtime from `/data/adb/neozygisk` to `/debug_ramdisk/neozygisk` without changing the upstream ptrace monitor, injector, daemon protocol, Zygisk API implementation, or restart lifecycle.
+Relocate NeoZygisk's runtime from `/data/adb/neozygisk` to a kernel-backed tmpfs path without changing the upstream ptrace monitor, injector, daemon protocol, Zygisk API implementation, or restart lifecycle.
 
-The target device is a Samsung Galaxy S25 Ultra (SM-S938B) running S938BXXSBCZG3 with temporary KernelSU root. Kernel logs from this device showed Samsung DEFEX rejecting `app_process64` access to Zygisk libraries under `/data/adb`. Zygisk Next remains functional on the same device while using a ramdisk runtime path.
+The target device is a Samsung Galaxy S25 Ultra (SM-S938B) running S938BXXSBCZG3 with temporary KernelSU root. Kernel logs from this device showed Samsung DEFEX rejecting `app_process64` access to Zygisk libraries under `/data/adb`.
+
+The first hardware build used `/debug_ramdisk/neozygisk`, following the last GPL Zygisk Next layout. On the target temporary-KernelSU boot, runtime staging failed before monitor startup and `/debug_ramdisk` was not available as a usable runtime parent. The path was therefore adapted to `/dev/.neozygisk`.
+
+`/dev` is an existing kernel-backed tmpfs on this device. A previous ReZygisk experiment already proved that a library staged under `/dev` can be opened by the Samsung zygote without triggering the `/data/adb` DEFEX denial. This keeps the relevant technique—loading from tmpfs outside `/data/adb`—without assuming a Magisk-style `/debug_ramdisk` mount exists.
 
 ## Scope
 
 Phase 1 changes only the compile-time work directory and build metadata:
 
-- native `WORK_DIRECTORY` becomes `/debug_ramdisk/neozygisk`;
+- native `WORK_DIRECTORY` becomes `/dev/.neozygisk`;
 - generated shell scripts receive the same path through `@WORK_DIRECTORY@` substitution;
-- the experimental version is marked `v2.3-postboot.1`;
+- the experimental version is marked as a PostBoot fork build;
 - the upstream update channel is disabled for fork builds;
-- CI verifies the generated scripts and native ptracer binaries contain the ramdisk path and no legacy `/data/adb/neozygisk` path.
+- CI verifies the generated scripts and native ptracer binaries contain the selected tmpfs path and no legacy `/data/adb/neozygisk` or unavailable `/debug_ramdisk/neozygisk` path.
 
 ## Explicit non-goals
 
@@ -32,17 +36,17 @@ Those behaviors belong to later phases and must be tested separately.
 
 ## Zygisk Next control build
 
-A downgrade to the last GPL Zygisk Next build is not required before Phase 1. Its source already establishes that the older implementation stages its runtime outside `/data/adb`, which is the specific behavior being reproduced here. A hardware test of that old binary would not isolate the path variable cleanly because it may lack newer Android 16, BTI, linker, or kernel compatibility work present in current providers.
+A downgrade to the last GPL Zygisk Next build is not required before Phase 1. Its source establishes the important behavior: staging outside `/data/adb`. A hardware test of that old binary would not isolate the path variable cleanly because it may lack newer Android 16, BTI, linker, or kernel compatibility work present in current providers.
 
-The old GPL build should therefore be used only as a secondary control if this Phase 1 NeoZygisk build fails before injection. The preferred first test is the modern NeoZygisk injector with only the runtime path changed.
+The old GPL build should therefore be used only as a secondary control if the modern NeoZygisk injector fails before injection after a usable tmpfs runtime has been staged.
 
 ## Build acceptance criteria
 
 A release and debug ZIP must build successfully. In each release ZIP:
 
-1. `post-fs-data.sh`, `action.sh`, and `uninstall.sh` must reference `/debug_ramdisk/neozygisk`.
-2. Every `libzygisk_ptrace.so` architecture must contain `/debug_ramdisk/neozygisk` as its compiled work directory.
-3. No packaged file may contain `/data/adb/neozygisk`.
+1. `postboot-bootstrap.sh`, `action.sh`, and `uninstall.sh` must reference `/dev/.neozygisk`.
+2. Every `libzygisk_ptrace.so` architecture must contain `/dev/.neozygisk` as its compiled work directory.
+3. No packaged file may contain `/data/adb/neozygisk` or `/debug_ramdisk/neozygisk`.
 4. The module ID remains `zygisksu` for Zygisk provider compatibility.
 
 ## Hardware test order
@@ -56,4 +60,4 @@ The first hardware test should be a cold-boot test after removing or disabling e
 - `/proc/1/status` `TracerPid`;
 - the runtime directory metadata and SELinux contexts.
 
-Soft-reboot persistence is a Phase 2/3 criterion, not a Phase 1 acceptance criterion.
+Soft-reboot persistence remains a later-phase criterion.
