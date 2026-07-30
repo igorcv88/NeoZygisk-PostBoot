@@ -74,9 +74,13 @@ else
   ui_print "- Device sdk: $API"
 fi
 
-# check architecture
-if [ "$ARCH" != "arm" ] && [ "$ARCH" != "arm64" ] && [ "$ARCH" != "x86" ] && [ "$ARCH" != "x64" ]; then
-  abort "! Unsupported platform: $ARCH"
+# This fork is validated only for the 64-bit ARM Samsung target. The Phase 3.1
+# verifier intentionally checks zygote64, daemon64, cp64.sock, and lib64.
+if [ "$ARCH" != "arm64" ]; then
+  ui_print "*********************************************************"
+  ui_print "! Unsupported platform for this PostBoot fork: $ARCH"
+  ui_print "! Only arm64 is supported and hardware validated"
+  abort    "*********************************************************"
 else
   ui_print "- Device platform: $ARCH"
 fi
@@ -118,35 +122,12 @@ mkdir "$MODPATH/bin"
 mkdir "$MODPATH/lib"
 mkdir "$MODPATH/lib64"
 
-if [ "$ARCH" = "x86" ]; then
-  ui_print "- Extracting x86 libraries"
-  extract "$ZIPFILE" 'bin/x86/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd32"
-  extract "$ZIPFILE" 'lib/x86/libzygisk.so' "$MODPATH/lib" true
-  extract "$ZIPFILE" 'lib/x86/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
-elif [ "$ARCH" = "x64" ]; then
-  ui_print "- Extracting x64 libraries"
-  extract "$ZIPFILE" 'bin/x86_64/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd64"
-  extract "$ZIPFILE" 'lib/x86_64/libzygisk.so' "$MODPATH/lib64" true
-  extract "$ZIPFILE" 'lib/x86_64/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
-elif [ "$ARCH" = "arm" ]; then
-  ui_print "- Extracting arm libraries"
-  extract "$ZIPFILE" 'bin/armeabi-v7a/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd32"
-  extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk.so' "$MODPATH/lib" true
-  extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
-elif [ "$ARCH" = "arm64" ]; then
-  ui_print "- Extracting arm64 libraries"
-  extract "$ZIPFILE" 'bin/arm64-v8a/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd64"
-  extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk.so' "$MODPATH/lib64" true
-  extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
-fi
+ui_print "- Extracting arm64 libraries"
+extract "$ZIPFILE" 'bin/arm64-v8a/zygiskd' "$MODPATH/bin" true
+mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd64"
+extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk.so' "$MODPATH/lib64" true
+extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk_ptrace.so' "$MODPATH/bin" true
+mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
 
 ui_print "- Setting permissions"
 set_perm "$MODPATH/postboot-activate.sh" 0 0 0755
