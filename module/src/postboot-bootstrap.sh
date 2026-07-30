@@ -61,13 +61,21 @@ select_tracer() {
   fi
 }
 
+# /proc/<pid>/status separates the key and value with a tab on Android.
+# Parse the whole line and keep digits only so "\t0" is normalized to "0".
 get_init_tracer() {
-  while IFS=' :' read -r key value rest; do
-    [ "$key" = "TracerPid" ] || continue
-    echo "$value"
-    return 0
+  while IFS= read -r line; do
+    case "$line" in
+      TracerPid:*)
+        value=${line#TracerPid:}
+        value=$(printf '%s' "$value" | /system/bin/tr -cd '0-9')
+        [ -n "$value" ] || value=0
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
   done < /proc/1/status
-  return 1
+  printf '0\n'
 }
 
 monitor_pids() {
@@ -95,7 +103,9 @@ inspect_monitor() {
     [ -n "$MONITOR_PID" ] || MONITOR_PID=$pid
   done
   INIT_TRACER=$(get_init_tracer 2>/dev/null || true)
-  [ -n "$INIT_TRACER" ] || INIT_TRACER=0
+  case "$INIT_TRACER" in
+    ''|*[!0-9]*) INIT_TRACER=0 ;;
+  esac
 }
 
 is_healthy() {
@@ -132,7 +142,7 @@ stage_runtime() {
     stage_error "create temporary runtime directory"
     return 1
   }
-  /system/bin/chmod 0555 "$tmp" 2>/dev/null || {
+  /system/bin/chmod 0755 "$tmp" 2>/dev/null || {
     stage_error "chmod temporary runtime directory"
     return 1
   }
@@ -151,16 +161,16 @@ stage_runtime() {
       stage_error "copy 64-bit libzygisk.so"
       return 1
     }
-    /system/bin/chmod 0555 "$tmp/lib64" 2>/dev/null || {
-      stage_error "chmod lib64 directory"
-      return 1
-    }
     /system/bin/chmod 0644 "$tmp/lib64/libzygisk.so" 2>/dev/null || {
       stage_error "chmod 64-bit libzygisk.so"
       return 1
     }
     /system/bin/chcon u:object_r:system_file:s0 "$tmp/lib64" "$tmp/lib64/libzygisk.so" 2>/dev/null || {
       stage_error "label 64-bit runtime"
+      return 1
+    }
+    /system/bin/chmod 0555 "$tmp/lib64" 2>/dev/null || {
+      stage_error "seal lib64 directory"
       return 1
     }
     staged=1
@@ -175,10 +185,6 @@ stage_runtime() {
       stage_error "copy 32-bit libzygisk.so"
       return 1
     }
-    /system/bin/chmod 0555 "$tmp/lib" 2>/dev/null || {
-      stage_error "chmod lib directory"
-      return 1
-    }
     /system/bin/chmod 0644 "$tmp/lib/libzygisk.so" 2>/dev/null || {
       stage_error "chmod 32-bit libzygisk.so"
       return 1
@@ -187,11 +193,20 @@ stage_runtime() {
       stage_error "label 32-bit runtime"
       return 1
     }
+    /system/bin/chmod 0555 "$tmp/lib" 2>/dev/null || {
+      stage_error "seal lib directory"
+      return 1
+    }
     staged=1
   fi
 
   [ "$staged" -eq 1 ] || {
     stage_error "no libzygisk.so was available"
+    return 1
+  }
+
+  /system/bin/chmod 0555 "$tmp" 2>/dev/null || {
+    stage_error "seal temporary runtime directory"
     return 1
   }
 
