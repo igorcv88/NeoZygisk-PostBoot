@@ -15,7 +15,7 @@ val gitCommitHash = "git rev-parse --verify --short HEAD".execute()
 
 val moduleId by extra("zygisksu")
 val moduleName by extra("NeoZygisk")
-val verName by extra("v2.3-postboot.3.2-rc1")
+val verName by extra("v2.3-postboot.3.2")
 val verCode by extra(gitCommitCount)
 val commitHash by extra(gitCommitHash)
 val minAPatchVersion by extra(10762)
@@ -24,8 +24,8 @@ val minKsudVersion by extra(11425)
 val maxKsuVersion by extra(30000)
 val minMagiskVersion by extra(26402)
 // The target temporary-KernelSU environment has no writable /debug_ramdisk.
-// /dev is an existing kernel-backed tmpfs and already passed the Samsung DEFEX
-// path test on this device, so keep the complete NeoZygisk runtime there.
+// /dev is an existing kernel-backed tmpfs and passed the Samsung DEFEX path
+// test on the hardware-validated target, so keep the live runtime there.
 val workDirectory by extra("/dev/.neozygisk")
 // Fork builds must not be silently replaced by the upstream update channel.
 val updateJson by extra("")
