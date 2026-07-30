@@ -8,12 +8,19 @@ STATUS=/data/local/tmp/neozygisk-postboot-phase3.status
 RUNLOG=/data/local/tmp/neozygisk-postboot-phase3.log
 RUNTIME_PROP="$WORK/module.prop"
 
+BOOTSTRAP_RESULT=
 MONITOR_PID=
 INIT_TRACER=
 ZYGOTE_PID=
 SYSTEM_SERVER_PID=
 DAEMON_PID=
 MONITOR_HEALTHY=0
+MONITOR_EXE_DELETED=0
+MONITOR_BINARY_MATCH=0
+RUNTIME_LIBRARY_MATCH=0
+RUNTIME_MONITOR_CRASHED=0
+FULL_REBOOT_REQUIRED=0
+MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=0
 RUNTIME_PROP_INJECTED=0
 RUNTIME_PROP_DAEMON_RUNNING=0
 ACTIVITY_READY=0
@@ -31,17 +38,23 @@ write_status() {
   detail=${2:-}
   tmp="${STATUS}.tmp.$$"
   {
-    echo "PHASE=3.1"
+    echo "PHASE=3.2"
     echo "RESULT=$result"
     echo "DETAIL=$detail"
     echo "WORK=$WORK"
     echo "RESTART_TRIGGERED_BY_MODULE=0"
     echo "TARGETED_ZYGOTE_RESTART_USED=0"
     echo "GLOBAL_SOFT_REBOOT_USED_BY_MODULE=0"
-    echo "MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=1"
+    echo "MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=$MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED"
+    echo "FULL_REBOOT_REQUIRED=$FULL_REBOOT_REQUIRED"
+    echo "BOOTSTRAP_RESULT=${BOOTSTRAP_RESULT:-}"
     echo "MONITOR_HEALTHY=$MONITOR_HEALTHY"
     echo "MONITOR_PID=${MONITOR_PID:-}"
     echo "INIT_TRACER=${INIT_TRACER:-}"
+    echo "MONITOR_EXE_DELETED=$MONITOR_EXE_DELETED"
+    echo "MONITOR_BINARY_MATCH=$MONITOR_BINARY_MATCH"
+    echo "RUNTIME_LIBRARY_MATCH=$RUNTIME_LIBRARY_MATCH"
+    echo "RUNTIME_MONITOR_CRASHED=$RUNTIME_MONITOR_CRASHED"
     echo "ZYGOTE_PID=${ZYGOTE_PID:-}"
     echo "SYSTEM_SERVER_PID=${SYSTEM_SERVER_PID:-}"
     echo "DAEMON_PID=${DAEMON_PID:-}"
@@ -150,15 +163,33 @@ library_mapped() {
   /system/bin/toybox grep -F "$WORK/lib64/libzygisk.so" "/proc/$ZYGOTE_PID/maps" >/dev/null 2>&1
 }
 
-refresh_health() {
-  if [ -r "$BOOTSTRAP" ] && /system/bin/sh "$BOOTSTRAP" status >/dev/null 2>&1; then
-    MONITOR_HEALTHY=1
-  else
-    MONITOR_HEALTHY=0
-  fi
+bootstrap_requires_full_reboot() {
+  case "$BOOTSTRAP_RESULT" in
+    UPDATE_REQUIRES_FULL_REBOOT|ZYGOTE_CRASH_REQUIRES_FULL_REBOOT|UNHEALTHY_REQUIRES_FULL_REBOOT|FULL_REBOOT_REQUIRED)
+      return 0
+      ;;
+  esac
+  return 1
+}
 
+refresh_health() {
+  /system/bin/sh "$BOOTSTRAP" status >/dev/null 2>&1 || true
+
+  BOOTSTRAP_RESULT=$(read_bootstrap_value RESULT 2>/dev/null || true)
   MONITOR_PID=$(read_bootstrap_value MONITOR_PID 2>/dev/null || true)
   INIT_TRACER=$(read_bootstrap_value INIT_TRACER 2>/dev/null || true)
+  MONITOR_EXE_DELETED=$(read_bootstrap_value MONITOR_EXE_DELETED 2>/dev/null || echo 0)
+  MONITOR_BINARY_MATCH=$(read_bootstrap_value MONITOR_BINARY_MATCH 2>/dev/null || echo 0)
+  RUNTIME_LIBRARY_MATCH=$(read_bootstrap_value RUNTIME_LIBRARY_MATCH 2>/dev/null || echo 0)
+  RUNTIME_MONITOR_CRASHED=$(read_bootstrap_value RUNTIME_MONITOR_CRASHED 2>/dev/null || echo 0)
+
+  case "$BOOTSTRAP_RESULT" in
+    HEALTHY|HEALTHY_STARTED|HEALTHY_REUSED) MONITOR_HEALTHY=1 ;;
+    *) MONITOR_HEALTHY=0 ;;
+  esac
+
+  if bootstrap_requires_full_reboot; then FULL_REBOOT_REQUIRED=1; else FULL_REBOOT_REQUIRED=0; fi
+
   ZYGOTE_PID=$(zygote_pid 2>/dev/null || true)
   SYSTEM_SERVER_PID=$(system_server_pid 2>/dev/null || true)
   DAEMON_PID=$(pid_for zygiskd64 zygiskd 2>/dev/null || true)
@@ -170,17 +201,37 @@ refresh_health() {
   if library_mapped; then LIBRARY_MAPPED_IN_ZYGOTE=1; else LIBRARY_MAPPED_IN_ZYGOTE=0; fi
 }
 
+all_injected_checks_pass() {
+  [ "$MONITOR_HEALTHY" -eq 1 ] && \
+  [ -n "$MONITOR_PID" ] && \
+  [ "$INIT_TRACER" = "$MONITOR_PID" ] && \
+  [ -n "$ZYGOTE_PID" ] && \
+  [ -n "$SYSTEM_SERVER_PID" ] && \
+  [ -n "$DAEMON_PID" ] && \
+  [ "$RUNTIME_PROP_INJECTED" -eq 1 ] && \
+  [ "$RUNTIME_PROP_DAEMON_RUNNING" -eq 1 ] && \
+  [ "$ACTIVITY_READY" -eq 1 ] && \
+  [ "$CP64_SOCKET_READY" -eq 1 ] && \
+  [ "$LIBRARY_MAPPED_IN_ZYGOTE" -eq 1 ]
+}
+
 snapshot() {
   {
     echo
-    echo "=== Phase 3.1 snapshot ==="
+    echo "=== Phase 3.2 snapshot ==="
     echo "time=$(/system/bin/date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || /system/bin/date)"
     echo "build=$(/system/bin/getprop ro.build.display.id 2>/dev/null)"
     echo "kernel=$(/system/bin/uname -r 2>/dev/null)"
+    echo "bootstrap_result=${BOOTSTRAP_RESULT:-}"
+    echo "monitor_pid=${MONITOR_PID:-}"
+    echo "init_tracer=${INIT_TRACER:-}"
+    echo "monitor_exe_deleted=$MONITOR_EXE_DELETED"
+    echo "monitor_binary_match=$MONITOR_BINARY_MATCH"
+    echo "runtime_library_match=$RUNTIME_LIBRARY_MATCH"
+    echo "runtime_monitor_crashed=$RUNTIME_MONITOR_CRASHED"
     echo "zygote64=${ZYGOTE_PID:-}"
     echo "system_server=${SYSTEM_SERVER_PID:-}"
     echo "zygiskd=${DAEMON_PID:-}"
-    echo "init_tracer=${INIT_TRACER:-}"
     echo
     echo "=== Runtime module.prop ==="
     /system/bin/cat "$RUNTIME_PROP" 2>/dev/null || true
@@ -190,6 +241,31 @@ snapshot() {
   } >> "$RUNLOG"
 }
 
+write_current_result() {
+  if [ "$FULL_REBOOT_REQUIRED" -eq 1 ]; then
+    MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=0
+    write_status FULL_REBOOT_REQUIRED "the live monitor/runtime is crashed, unhealthy, or from a different installed generation; do not use another Soft Reboot"
+    return 3
+  fi
+
+  if all_injected_checks_pass; then
+    MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=0
+    write_status INJECTION_VERIFIED "healthy same-generation NeoZygisk state verified"
+    return 0
+  fi
+
+  if [ "$MONITOR_HEALTHY" -eq 1 ] && [ "$INIT_TRACER" = "$MONITOR_PID" ] && \
+     { [ "$RUNTIME_PROP_INJECTED" -eq 0 ] || [ "$RUNTIME_PROP_DAEMON_RUNNING" -eq 0 ]; }; then
+    MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=1
+    write_status WAITING_FOR_KERNELSU_SOFT_REBOOT "same-generation monitor is healthy; use one KernelSU Manager Soft Reboot only in a clean post-exploit session"
+    return 2
+  fi
+
+  MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=0
+  write_status NOT_HEALTHY "NeoZygisk state did not satisfy the live verification checks"
+  return 1
+}
+
 verify_state() {
   [ "$(/system/bin/id -u 2>/dev/null)" = 0 ] || {
     write_status FAILED "root privileges are required"
@@ -197,26 +273,24 @@ verify_state() {
   }
 
   : > "$RUNLOG"
-  log_line "Phase 3.1 read-only verification started"
+  log_line "Phase 3.2 live verification started"
 
   n=0
   while [ "$n" -lt 30 ]; do
     refresh_health
 
-    if [ "$MONITOR_HEALTHY" -eq 1 ] && \
-       [ -n "$MONITOR_PID" ] && \
-       [ "$INIT_TRACER" = "$MONITOR_PID" ] && \
-       [ -n "$ZYGOTE_PID" ] && \
-       [ -n "$SYSTEM_SERVER_PID" ] && \
-       [ -n "$DAEMON_PID" ] && \
-       [ "$RUNTIME_PROP_INJECTED" -eq 1 ] && \
-       [ "$RUNTIME_PROP_DAEMON_RUNNING" -eq 1 ] && \
-       [ "$ACTIVITY_READY" -eq 1 ] && \
-       [ "$CP64_SOCKET_READY" -eq 1 ] && \
-       [ "$LIBRARY_MAPPED_IN_ZYGOTE" -eq 1 ]; then
+    if [ "$FULL_REBOOT_REQUIRED" -eq 1 ]; then
       snapshot
-      write_status INJECTION_VERIFIED "healthy NeoZygisk state verified after an external KernelSU module lifecycle"
-      log_line "Phase 3.1 succeeded without initiating any restart"
+      write_current_result
+      rc=$?
+      log_line "Phase 3.2 refused in-session recovery and requires a full reboot"
+      exit "$rc"
+    fi
+
+    if all_injected_checks_pass; then
+      snapshot
+      write_current_result
+      log_line "Phase 3.2 succeeded without initiating any restart"
       exit 0
     fi
 
@@ -225,31 +299,45 @@ verify_state() {
   done
 
   snapshot
-  if [ "$MONITOR_HEALTHY" -eq 1 ] && [ "$INIT_TRACER" = "$MONITOR_PID" ] && \
-     { [ "$RUNTIME_PROP_INJECTED" -eq 0 ] || [ "$RUNTIME_PROP_DAEMON_RUNNING" -eq 0 ]; }; then
-    write_status WAITING_FOR_KERNELSU_SOFT_REBOOT "monitor is healthy, but zygote injection is not active; use KernelSU Manager Soft Reboot from a clean post-exploit session and verify again"
-    log_line "Phase 3.1 is waiting for the external KernelSU module lifecycle"
-    exit 2
-  fi
-
-  write_status NOT_HEALTHY "NeoZygisk post-reboot state did not satisfy all verification checks"
-  log_line "Phase 3.1 verification failed without initiating recovery"
-  exit 1
+  write_current_result
+  rc=$?
+  case "$rc" in
+    2) log_line "Phase 3.2 is waiting for one external KernelSU module lifecycle" ;;
+    3) log_line "Phase 3.2 requires a full reboot before another exploit/Soft Reboot cycle" ;;
+    *) log_line "Phase 3.2 verification failed without initiating recovery" ;;
+  esac
+  exit "$rc"
 }
 
 show_status() {
-  echo "=== Phase 3.1 verification status ==="
-  /system/bin/cat "$STATUS" 2>/dev/null || echo "No Phase 3.1 status recorded"
+  echo "=== Phase 3.2 live verification status ==="
+  /system/bin/cat "$STATUS" 2>/dev/null || echo "No Phase 3.2 status recorded"
   echo
   echo "=== Runtime module.prop ==="
   /system/bin/cat "$RUNTIME_PROP" 2>/dev/null || echo "Runtime module.prop is unavailable"
   echo
-  echo "=== Recent Phase 3.1 log ==="
-  /system/bin/toybox tail -n 120 "$RUNLOG" 2>/dev/null || echo "No Phase 3.1 log recorded"
+  echo "=== Recent Phase 3.2 log ==="
+  /system/bin/toybox tail -n 120 "$RUNLOG" 2>/dev/null || echo "No Phase 3.2 log recorded"
+}
+
+status_live() {
+  [ "$(/system/bin/id -u 2>/dev/null)" = 0 ] || {
+    write_status FAILED "root privileges are required"
+    show_status
+    return 1
+  }
+
+  log_line "Phase 3.2 live status requested"
+  refresh_health
+  snapshot
+  write_current_result
+  rc=$?
+  show_status
+  return "$rc"
 }
 
 case "${1:-status}" in
   verify|start|activate) verify_state ;;
-  status) show_status ;;
+  status) status_live; exit $? ;;
   *) echo "usage: $0 [verify|status]" >&2; exit 2 ;;
 esac
