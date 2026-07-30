@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: neozygisk-postboot-release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   release:
