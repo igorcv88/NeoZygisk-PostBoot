@@ -27,7 +27,6 @@ RUNTIME_PROP_DAEMON_RUNNING=0
 ACTIVITY_READY=0
 LOGCAT_PID=
 LOGCAT_CAPTURE=0
-DETAIL=
 
 log_line() {
   now=$(/system/bin/date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || /system/bin/date)
@@ -112,6 +111,43 @@ pid_for() {
   return 1
 }
 
+zygote_pid() {
+  pid=$(pid_for zygote64 2>/dev/null || true)
+  if [ -n "$pid" ]; then
+    echo "$pid"
+    return 0
+  fi
+
+  for proc in /proc/[0-9]*; do
+    [ -r "$proc/cmdline" ] || continue
+    cmd=$(/system/bin/toybox tr '\000' ' ' < "$proc/cmdline" 2>/dev/null || true)
+    case "$cmd" in
+      *app_process64*--zygote*|*zygote64*)
+        echo "${proc#/proc/}"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+system_server_pid() {
+  pid=$(pid_for system_server 2>/dev/null || true)
+  if [ -n "$pid" ]; then
+    echo "$pid"
+    return 0
+  fi
+
+  for proc in /proc/[0-9]*; do
+    [ -r "$proc/cmdline" ] || continue
+    cmd=$(/system/bin/toybox tr '\000' ' ' < "$proc/cmdline" 2>/dev/null || true)
+    case "$cmd" in
+      *system_server*) echo "${proc#/proc/}"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
 runtime_line() {
   label=$1
   [ -r "$RUNTIME_PROP" ] || return 1
@@ -184,7 +220,7 @@ start_logcat() {
 stop_logcat() {
   if [ -n "${LOGCAT_PID:-}" ]; then
     /system/bin/toybox kill "$LOGCAT_PID" 2>/dev/null || true
-    /system/bin/toybox wait "$LOGCAT_PID" 2>/dev/null || true
+    wait "$LOGCAT_PID" 2>/dev/null || true
     LOGCAT_PID=
   fi
 }
@@ -196,8 +232,8 @@ snapshot() {
     echo "time=$(/system/bin/date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || /system/bin/date)"
     echo "init.svc.zygote=$(/system/bin/getprop init.svc.zygote 2>/dev/null)"
     echo "init.svc.zygote_secondary=$(/system/bin/getprop init.svc.zygote_secondary 2>/dev/null)"
-    echo "zygote64=$(pid_for zygote64 zygote 2>/dev/null || true)"
-    echo "system_server=$(pid_for system_server 2>/dev/null || true)"
+    echo "zygote64=$(zygote_pid 2>/dev/null || true)"
+    echo "system_server=$(system_server_pid 2>/dev/null || true)"
     echo "zygiskd=$(pid_for zygiskd64 zygiskd 2>/dev/null || true)"
     echo "init_tracer=$(while IFS=' :' read -r key value rest; do [ "$key" = TracerPid ] && { echo "$value"; break; }; done < /proc/1/status)"
     echo
@@ -239,7 +275,7 @@ run_activation() {
   write_status STARTING "validating the Phase 2 monitor"
   log_line "Phase 3 activation started"
 
-  [ -x "$BOOTSTRAP" ] || fail_activation "Phase 2 bootstrap is unavailable"
+  [ -r "$BOOTSTRAP" ] || fail_activation "Phase 2 bootstrap is unavailable"
   if ! /system/bin/sh "$BOOTSTRAP" ensure >> "$RUNLOG" 2>&1; then
     fail_activation "Phase 2 monitor bootstrap is not healthy"
   fi
@@ -249,8 +285,8 @@ run_activation() {
   [ -n "$MONITOR_PID" ] || fail_activation "monitor pid is unavailable"
   [ "$INIT_TRACER" = "$MONITOR_PID" ] || fail_activation "init tracer does not match the NeoZygisk monitor"
 
-  OLD_ZYGOTE=$(pid_for zygote64 zygote 2>/dev/null || true)
-  OLD_SYSTEM_SERVER=$(pid_for system_server 2>/dev/null || true)
+  OLD_ZYGOTE=$(zygote_pid 2>/dev/null || true)
+  OLD_SYSTEM_SERVER=$(system_server_pid 2>/dev/null || true)
   [ -n "$OLD_ZYGOTE" ] || fail_activation "current zygote64 pid is unavailable"
   [ -n "$OLD_SYSTEM_SERVER" ] || fail_activation "current system_server pid is unavailable"
 
@@ -275,8 +311,8 @@ run_activation() {
   last_zygote=$OLD_ZYGOTE
   n=0
   while [ "$n" -lt 90 ]; do
-    current_zygote=$(pid_for zygote64 zygote 2>/dev/null || true)
-    current_system_server=$(pid_for system_server 2>/dev/null || true)
+    current_zygote=$(zygote_pid 2>/dev/null || true)
+    current_system_server=$(system_server_pid 2>/dev/null || true)
 
     if [ -n "$current_zygote" ] && [ "$current_zygote" != "$last_zygote" ]; then
       ZYGOTE_RESTART_COUNT=$((ZYGOTE_RESTART_COUNT + 1))
