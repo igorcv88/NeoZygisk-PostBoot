@@ -153,7 +153,7 @@ androidComponents.onVariants { variant ->
     val installMagiskTask = task<Exec>("installMagisk$variantCapped") {
         group = "module"
         dependsOn(pushTask)
-        commandLine("adb", "push", zipTask.outputs.files.singleFile.path, "/data/local/tmp")
+        commandLine("adb", "shell", "su", "-M", "-c", "magisk --install-module /data/local/tmp/$zipFileName")
     }
 
     task<Exec>("installAPatchAndReboot$variantCapped") {
