@@ -105,11 +105,12 @@ if [ "$KSU" ]; then
 fi
 
 ui_print "- Extracting module files"
-extract "$ZIPFILE" 'action.sh'     "$MODPATH"
-extract "$ZIPFILE" 'module.prop'     "$MODPATH"
-extract "$ZIPFILE" 'post-fs-data.sh' "$MODPATH"
-extract "$ZIPFILE" 'service.sh'      "$MODPATH"
-extract "$ZIPFILE" 'uninstall.sh'      "$MODPATH"
+extract "$ZIPFILE" 'action.sh'              "$MODPATH"
+extract "$ZIPFILE" 'module.prop'            "$MODPATH"
+extract "$ZIPFILE" 'post-fs-data.sh'        "$MODPATH"
+extract "$ZIPFILE" 'postboot-bootstrap.sh'  "$MODPATH"
+extract "$ZIPFILE" 'service.sh'             "$MODPATH"
+extract "$ZIPFILE" 'uninstall.sh'           "$MODPATH"
 mv "$TMPDIR/sepolicy.rule" "$MODPATH"
 
 mkdir "$MODPATH/bin"
@@ -147,6 +148,7 @@ elif [ "$ARCH" = "arm64" ]; then
 fi
 
 ui_print "- Setting permissions"
+set_perm "$MODPATH/postboot-bootstrap.sh" 0 0 0755
 set_perm_recursive "$MODPATH/bin" 0 0 0755 0755
 set_perm_recursive "$MODPATH/lib" 0 0 0755 0644 u:object_r:system_lib_file:s0
 set_perm_recursive "$MODPATH/lib64" 0 0 0755 0644 u:object_r:system_lib_file:s0
