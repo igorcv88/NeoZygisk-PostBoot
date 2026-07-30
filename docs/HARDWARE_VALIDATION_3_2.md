@@ -95,3 +95,9 @@ Installing a provider update while a monitor exists requires:
 
 Any crash, deleted monitor, generation mismatch or `FULL_REBOOT_REQUIRED` result
 must be resolved by a full device reboot, not another Soft Reboot.
+
+## Release approval
+
+The complete result above satisfies the stable 3.2 acceptance criteria. The raw
+installable module ZIP and its portable SHA-256 file are approved for publication
+under GitHub Releases. No Actions artifact wrapper is approved or required.
