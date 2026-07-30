@@ -11,9 +11,11 @@ The bootstrap is deliberately non-destructive:
 - it never kills a monitor, daemon, zygote, system_server, or init;
 - it refuses to start when init is traced by an unknown process;
 - it refuses to start when more than one NeoZygisk monitor is detected;
-- it stages the DEFEX-safe runtime atomically under `/debug_ramdisk/neozygisk`;
+- it stages the DEFEX-safe runtime atomically under `/dev/.neozygisk`;
 - it reuses a healthy monitor and sends `ctl start` only to a single recognized stopped monitor;
 - it records persistent diagnostics under `/data/local/tmp`.
+
+The target Android build does not provide a usable `/debug_ramdisk` parent in the temporary-KernelSU session. `/dev` is always present as kernel-backed tmpfs and has already passed a direct Samsung DEFEX path test on this device.
 
 ## Runtime states
 
@@ -25,11 +27,17 @@ The status file `/data/local/tmp/neozygisk-postboot.status` reports one of these
 - `FAILED`: the bootstrap failed closed and did not perform destructive cleanup;
 - `BUSY`: another bootstrap invocation owns the lock.
 
+When runtime staging fails, `STAGE_ERROR` records the exact failed operation instead of returning only a generic staging error.
+
 A monitor is considered healthy only when all conditions match:
 
 1. exactly one monitor process executes the installed tracer binary with the `monitor` argument;
 2. `/proc/1/status` reports that monitor PID as `TracerPid`;
-3. `/debug_ramdisk/neozygisk/init_monitor` exists as a UNIX socket.
+3. `/dev/.neozygisk/init_monitor` exists as a UNIX socket.
+
+## Target-shell compatibility
+
+The bootstrap does not use `awk`. The target Samsung userspace exposed `/system/bin/awk` through a Toybox build without the `awk` applet, so PID counting and `/proc/1/status` parsing are implemented with POSIX shell primitives.
 
 ## Scope boundary
 
