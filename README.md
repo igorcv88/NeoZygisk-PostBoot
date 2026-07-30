@@ -1,3 +1,31 @@
+# NeoZygisk PostBoot
+
+This fork adapts NeoZygisk for a temporary KernelSU root environment on the Samsung Galaxy S25 Ultra SM-S938B / S938BXXSBCZG3.
+
+## Validated lifecycle on the target device
+
+1. Perform the simple Root-My-Galaxy exploit to activate temporary KernelSU root.
+2. Install or update this module and the required Zygisk modules.
+3. Open KernelSU Manager and use **Soft Reboot** once.
+4. After Android returns, use the module Action button or run `postboot-activate.sh verify` to verify NeoZygisk.
+
+The module does **not** restart zygote, Android userspace, or the device by itself. A targeted `ctl.restart zygote` experiment was withdrawn after it produced Samsung's `Device Services Uninstalled` failure state on the target firmware.
+
+The target-tested runtime is staged at `/dev/.neozygisk` so the live zygote can map `libzygisk.so` without Samsung DEFEX rejecting the persistent `/data/adb` path.
+
+A verified state requires:
+
+- one NeoZygisk monitor attached to init;
+- init's `TracerPid` matching the monitor PID;
+- an injected `zygote64` and running `zygiskd64`;
+- `/dev/.neozygisk/cp64.sock`;
+- `/dev/.neozygisk/lib64/libzygisk.so` mapped in the live zygote;
+- the Android activity service available.
+
+See `docs/PHASE3_TARGETED_ZYGOTE.md` for the hardware result and the Phase 3.1 verification model.
+
+---
+
 # NeoZygisk
 
 NeoZygisk is a Zygote injection module, implemented via [`ptrace`](https://man7.org/linux/man-pages/man2/ptrace.2.html), that provides Zygisk API support for APatch and KernelSU.
@@ -7,10 +35,10 @@ It also functions as a powerful replacement for Magisk's built-in Zygisk.
 
 NeoZygisk is engineered with four key objectives:
 
-1.  **API Compatibility:** Maintains full API compatibility with [Magisk's built-in Zygisk](https://github.com/topjohnwu/Magisk/tree/master/native/src/core/zygisk). The relevant API designs are mirrored in the source folder [injector](https://github.com/JingMatrix/NeoZygisk/tree/master/loader/src/injector) for reference.
-2.  **Minimalist Design:** Focuses on a lean and efficient implementation of the Zygisk API, avoiding feature bloat to ensure stability and performance.
-3.  **Trace Cleaning:** Guarantees the complete removal of its injection traces from application processes once all Zygisk modules are unloaded.
-4.  **Advanced Stealth:** Employs a sophisticated DenyList to provide granular control over root and module visibility, effectively hiding the traces of your root solution.
+1. **API Compatibility:** Maintains full API compatibility with [Magisk's built-in Zygisk](https://github.com/topjohnwu/Magisk/tree/master/native/src/core/zygisk). The relevant API designs are mirrored in the source folder [injector](https://github.com/JingMatrix/NeoZygisk/tree/master/loader/src/injector) for reference.
+2. **Minimalist Design:** Focuses on a lean and efficient implementation of the Zygisk API, avoiding feature bloat to ensure stability and performance.
+3. **Trace Cleaning:** Guarantees the complete removal of its injection traces from application processes once all Zygisk modules are unloaded.
+4. **Advanced Stealth:** Employs a sophisticated DenyList to provide granular control over root and module visibility, effectively hiding the traces of your root solution.
 
 ## The DenyList Explained
 
@@ -25,18 +53,18 @@ Here is how NeoZygisk manages visibility for different application states:
 
 To achieve a clean mount namespace for applications on the DenyList, NeoZygisk employs two distinct strategies: a primary, aggressive approach and a reliable fallback.
 
-1.  **Direct Zygote Unmounting (Primary Strategy)**
-    As an experimental feature for bypassing advanced detection, NeoZygisk attempts to unmount all root-related traces directly from the zygote process itself. This cleans the environment *before* an application process is fully specialized, offering a potentially more robust hiding mechanism. To ensure system stability, this operation is only performed after a strict safety check. If a module is providing critical system resources (e.g., an overlay in `/product`), this direct unmount is aborted to prevent a zygote crash.
+1. **Direct Zygote Unmounting (Primary Strategy)**  
+   As an experimental feature for bypassing advanced detection, NeoZygisk attempts to unmount all root-related traces directly from the zygote process itself. This cleans the environment *before* an application process is fully specialized, offering a potentially more robust hiding mechanism. To ensure system stability, this operation is only performed after a strict safety check. If a module is providing critical system resources (e.g., an overlay in `/product`), this direct unmount is aborted to prevent a zygote crash.
 
-2.  **Namespace Switching (Fallback Strategy)**
-    If the direct unmount strategy is aborted for safety, or if any traces failed to unmount, NeoZygisk reverts to its standard, reliable method. After an app process forks, the `setns` syscall is used to switch it into a cached, completely clean mount namespace, effectively isolating it from all system modifications.
+2. **Namespace Switching (Fallback Strategy)**  
+   If the direct unmount strategy is aborted for safety, or if any traces failed to unmount, NeoZygisk reverts to its standard, reliable method. After an app process forks, the `setns` syscall is used to switch it into a cached, completely clean mount namespace, effectively isolating it from all system modifications.
 
 ## Configuration
 
 To configure the DenyList for a specific application, use the appropriate setting within your root management app:
 
-*   **For APatch/KernelSU:** Enable the **`Umount modules`** option for your target application.
-*   **For Magisk:** Use the **`Configure DenyList`** menu.
+- **For APatch/KernelSU:** Enable the **`Umount modules`** option for your target application.
+- **For Magisk:** Use the **`Configure DenyList`** menu.
 
 > **Important Note for Magisk Users**
 >
