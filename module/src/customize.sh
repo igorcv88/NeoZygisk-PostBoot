@@ -66,7 +66,6 @@ fi
 VERSION=$(grep_prop version "${TMPDIR}/module.prop")
 ui_print "- Installing NeoZygisk $VERSION"
 
-# check android
 if [ "$API" -lt 26 ]; then
   ui_print "! Unsupported sdk: $API"
   abort "! Minimal supported sdk is 26 (Android 8.0)"
@@ -74,8 +73,6 @@ else
   ui_print "- Device sdk: $API"
 fi
 
-# This fork is validated only for the 64-bit ARM Samsung target. The Phase 3.1
-# verifier intentionally checks zygote64, daemon64, cp64.sock, and lib64.
 if [ "$ARCH" != "arm64" ]; then
   ui_print "*********************************************************"
   ui_print "! Unsupported platform for this PostBoot fork: $ARCH"
@@ -83,6 +80,24 @@ if [ "$ARCH" != "arm64" ]; then
   abort    "*********************************************************"
 else
   ui_print "- Device platform: $ARCH"
+fi
+
+ACTIVE_MONITOR_PID=
+for proc in /proc/[0-9]*; do
+  [ -r "$proc/cmdline" ] || continue
+  cmd=$(/system/bin/tr '\000' ' ' < "$proc/cmdline" 2>/dev/null || true)
+  case "$cmd" in
+    *zygisk-ptrace*monitor*) ACTIVE_MONITOR_PID=${proc#/proc/}; break ;;
+  esac
+done
+
+if [ -n "$ACTIVE_MONITOR_PID" ]; then
+  UPDATE_BOOT_ID=$(/system/bin/cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
+  ui_print "*********************************************************"
+  ui_print "! Existing NeoZygisk monitor detected: PID $ACTIVE_MONITOR_PID"
+  ui_print "! Do NOT use KernelSU Soft Reboot in this kernel session"
+  ui_print "! Required: full reboot -> simple exploit -> one Soft Reboot"
+  ui_print "*********************************************************"
 fi
 
 ui_print "- Extracting verify.sh"
@@ -118,6 +133,14 @@ extract "$ZIPFILE" 'service.sh'             "$MODPATH"
 extract "$ZIPFILE" 'uninstall.sh'           "$MODPATH"
 mv "$TMPDIR/sepolicy.rule" "$MODPATH"
 
+if [ -n "$ACTIVE_MONITOR_PID" ]; then
+  {
+    echo "boot_id=${UPDATE_BOOT_ID:-unknown}"
+    echo "monitor_pid=$ACTIVE_MONITOR_PID"
+  } > "$MODPATH/update_requires_full_reboot"
+  /system/bin/chmod 0644 "$MODPATH/update_requires_full_reboot" 2>/dev/null || true
+fi
+
 mkdir "$MODPATH/bin"
 mkdir "$MODPATH/lib"
 mkdir "$MODPATH/lib64"
@@ -136,7 +159,6 @@ set_perm_recursive "$MODPATH/bin" 0 0 0755 0755
 set_perm_recursive "$MODPATH/lib" 0 0 0755 0644 u:object_r:system_lib_file:s0
 set_perm_recursive "$MODPATH/lib64" 0 0 0755 0644 u:object_r:system_lib_file:s0
 
-# If Huawei's Maple is enabled, system_server is created with a special way which is out of Zygisk's control
 HUAWEI_MAPLE_ENABLED=$(grep_prop ro.maple.enable)
 if [ "$HUAWEI_MAPLE_ENABLED" == "1" ]; then
   ui_print "- Add ro.maple.enable=0"
