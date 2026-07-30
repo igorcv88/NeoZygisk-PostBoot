@@ -6,6 +6,7 @@ MODDIR=${0%/*}
 STATUS=/data/local/tmp/neozygisk-postboot.status
 RUNLOG=/data/local/tmp/neozygisk-postboot.log
 LOCK=/data/local/tmp/neozygisk-postboot.lock
+STAGE_ERROR=
 
 log_line() {
   now=$(/system/bin/date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || /system/bin/date)
@@ -20,6 +21,7 @@ write_status() {
     echo "RESULT=$1"
     echo "DETAIL=${2:-}"
     echo "WORK=$WORK"
+    echo "STAGE_ERROR=${STAGE_ERROR:-}"
     echo "MONITOR_PID=${MONITOR_PID:-}"
     echo "INIT_TRACER=${INIT_TRACER:-}"
     echo "TIMESTAMP=$(/system/bin/date +%s 2>/dev/null || echo 0)"
@@ -60,7 +62,12 @@ select_tracer() {
 }
 
 get_init_tracer() {
-  /system/bin/awk '/^TracerPid:/ { print $2; exit }' /proc/1/status 2>/dev/null
+  while IFS=' :' read -r key value rest; do
+    [ "$key" = "TracerPid" ] || continue
+    echo "$value"
+    return 0
+  done < /proc/1/status
+  return 1
 }
 
 monitor_pids() {
@@ -81,9 +88,13 @@ monitor_pids() {
 
 inspect_monitor() {
   MONITOR_LIST=$(monitor_pids)
-  MONITOR_COUNT=$(printf '%s\n' "$MONITOR_LIST" | /system/bin/awk 'NF { n++ } END { print n+0 }')
-  MONITOR_PID=$(printf '%s\n' "$MONITOR_LIST" | /system/bin/awk 'NF { print; exit }')
-  INIT_TRACER=$(get_init_tracer)
+  MONITOR_COUNT=0
+  MONITOR_PID=
+  for pid in $MONITOR_LIST; do
+    MONITOR_COUNT=$((MONITOR_COUNT + 1))
+    [ -n "$MONITOR_PID" ] || MONITOR_PID=$pid
+  done
+  INIT_TRACER=$(get_init_tracer 2>/dev/null || true)
   [ -n "$INIT_TRACER" ] || INIT_TRACER=0
 }
 
@@ -94,46 +105,109 @@ is_healthy() {
   return 0
 }
 
+stage_error() {
+  STAGE_ERROR=$1
+  log_line "runtime staging failed at $STAGE_ERROR"
+}
+
 stage_runtime() {
   parent=${WORK%/*}
   tmp="${WORK}.new.$$"
   old="${WORK}.old.$$"
+  STAGE_ERROR=
 
-  /system/bin/mkdir -p "$parent" 2>/dev/null || return 1
-  /system/bin/rm -rf "$tmp" "$old" 2>/dev/null || return 1
-  /system/bin/mkdir -p "$tmp" || return 1
-  /system/bin/chmod 0555 "$tmp" || return 1
-  /system/bin/chcon u:object_r:system_file:s0 "$tmp" 2>/dev/null || return 1
+  [ -d "$parent" ] || {
+    stage_error "parent directory missing: $parent"
+    return 1
+  }
+  [ -w "$parent" ] || {
+    stage_error "parent directory not writable: $parent"
+    return 1
+  }
+  /system/bin/rm -rf "$tmp" "$old" 2>/dev/null || {
+    stage_error "remove stale staging paths"
+    return 1
+  }
+  /system/bin/mkdir "$tmp" 2>/dev/null || {
+    stage_error "create temporary runtime directory"
+    return 1
+  }
+  /system/bin/chmod 0555 "$tmp" 2>/dev/null || {
+    stage_error "chmod temporary runtime directory"
+    return 1
+  }
+  /system/bin/chcon u:object_r:system_file:s0 "$tmp" 2>/dev/null || {
+    stage_error "label temporary runtime directory"
+    return 1
+  }
 
   staged=0
   if [ -r "$MODDIR/lib64/libzygisk.so" ]; then
-    /system/bin/mkdir -p "$tmp/lib64" || return 1
-    /system/bin/cp -f "$MODDIR/lib64/libzygisk.so" "$tmp/lib64/libzygisk.so" || return 1
-    /system/bin/chmod 0555 "$tmp/lib64" || return 1
-    /system/bin/chmod 0644 "$tmp/lib64/libzygisk.so" || return 1
-    /system/bin/chcon u:object_r:system_file:s0 "$tmp/lib64" "$tmp/lib64/libzygisk.so" 2>/dev/null || return 1
+    /system/bin/mkdir "$tmp/lib64" 2>/dev/null || {
+      stage_error "create lib64 directory"
+      return 1
+    }
+    /system/bin/cp -f "$MODDIR/lib64/libzygisk.so" "$tmp/lib64/libzygisk.so" 2>/dev/null || {
+      stage_error "copy 64-bit libzygisk.so"
+      return 1
+    }
+    /system/bin/chmod 0555 "$tmp/lib64" 2>/dev/null || {
+      stage_error "chmod lib64 directory"
+      return 1
+    }
+    /system/bin/chmod 0644 "$tmp/lib64/libzygisk.so" 2>/dev/null || {
+      stage_error "chmod 64-bit libzygisk.so"
+      return 1
+    }
+    /system/bin/chcon u:object_r:system_file:s0 "$tmp/lib64" "$tmp/lib64/libzygisk.so" 2>/dev/null || {
+      stage_error "label 64-bit runtime"
+      return 1
+    }
     staged=1
   fi
 
   if [ -r "$MODDIR/lib/libzygisk.so" ]; then
-    /system/bin/mkdir -p "$tmp/lib" || return 1
-    /system/bin/cp -f "$MODDIR/lib/libzygisk.so" "$tmp/lib/libzygisk.so" || return 1
-    /system/bin/chmod 0555 "$tmp/lib" || return 1
-    /system/bin/chmod 0644 "$tmp/lib/libzygisk.so" || return 1
-    /system/bin/chcon u:object_r:system_file:s0 "$tmp/lib" "$tmp/lib/libzygisk.so" 2>/dev/null || return 1
+    /system/bin/mkdir "$tmp/lib" 2>/dev/null || {
+      stage_error "create lib directory"
+      return 1
+    }
+    /system/bin/cp -f "$MODDIR/lib/libzygisk.so" "$tmp/lib/libzygisk.so" 2>/dev/null || {
+      stage_error "copy 32-bit libzygisk.so"
+      return 1
+    }
+    /system/bin/chmod 0555 "$tmp/lib" 2>/dev/null || {
+      stage_error "chmod lib directory"
+      return 1
+    }
+    /system/bin/chmod 0644 "$tmp/lib/libzygisk.so" 2>/dev/null || {
+      stage_error "chmod 32-bit libzygisk.so"
+      return 1
+    }
+    /system/bin/chcon u:object_r:system_file:s0 "$tmp/lib" "$tmp/lib/libzygisk.so" 2>/dev/null || {
+      stage_error "label 32-bit runtime"
+      return 1
+    }
     staged=1
   fi
 
-  [ "$staged" -eq 1 ] || return 1
+  [ "$staged" -eq 1 ] || {
+    stage_error "no libzygisk.so was available"
+    return 1
+  }
 
   if [ -e "$WORK" ]; then
-    /system/bin/mv "$WORK" "$old" || return 1
+    /system/bin/mv "$WORK" "$old" 2>/dev/null || {
+      stage_error "move previous runtime aside"
+      return 1
+    }
   fi
-  if ! /system/bin/mv "$tmp" "$WORK"; then
+  if ! /system/bin/mv "$tmp" "$WORK" 2>/dev/null; then
     [ -e "$old" ] && /system/bin/mv "$old" "$WORK" 2>/dev/null || true
+    stage_error "publish staged runtime"
     return 1
   fi
   /system/bin/rm -rf "$old" 2>/dev/null || true
+  log_line "runtime staged successfully at $WORK"
   return 0
 }
 
@@ -214,7 +288,6 @@ ensure_runtime() {
 
   stage_runtime || {
     write_status FAILED "unable to stage DEFEX-safe runtime"
-    log_line "runtime staging failed"
     return 1
   }
 
