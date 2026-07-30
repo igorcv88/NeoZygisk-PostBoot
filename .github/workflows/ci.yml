@@ -64,11 +64,11 @@ jobs:
       - name: Verify restart-free PostBoot module
         run: |
           set -eu
-          RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
-          test -n "$RELEASE_ZIP"
+          BUILT_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
+          test -n "$BUILT_ZIP"
           rm -rf release-check
           mkdir release-check
-          unzip -q "$RELEASE_ZIP" -d release-check
+          unzip -q "$BUILT_ZIP" -d release-check
 
           test -f release-check/postboot-bootstrap.sh
           test -f release-check/postboot-activate.sh
@@ -79,6 +79,7 @@ jobs:
           grep -F 'postboot-bootstrap.sh" ensure' release-check/service.sh
           grep -F "extract \"\$ZIPFILE\" 'postboot-bootstrap.sh'" release-check/customize.sh
           grep -F "extract \"\$ZIPFILE\" 'postboot-activate.sh'" release-check/customize.sh
+          grep -F 'if [ "$ARCH" != "arm64" ]' release-check/customize.sh
           grep -F 'id=zygisksu' release-check/module.prop
 
           grep -F 'write_status INJECTION_VERIFIED' release-check/postboot-activate.sh
@@ -128,11 +129,14 @@ jobs:
             exit 1
           fi
 
-          sha256sum "$RELEASE_ZIP" | tee "${RELEASE_ZIP}.sha256"
-          RELEASE_FILE=$(basename "$RELEASE_ZIP")
+          RELEASE_FILE=$(basename "$BUILT_ZIP")
           RELEASE_STEM=${RELEASE_FILE%.zip}
           RELEASE_TAG=${RELEASE_STEM#NeoZygisk-}
-          echo "RELEASE_ZIP=$RELEASE_ZIP" >> "$GITHUB_ENV"
+          cp "$BUILT_ZIP" "$RELEASE_FILE"
+          sha256sum "$RELEASE_FILE" | tee "${RELEASE_FILE}.sha256"
+          unzip -t "$RELEASE_FILE"
+
+          echo "RELEASE_ZIP=$RELEASE_FILE" >> "$GITHUB_ENV"
           echo "RELEASE_FILE=$RELEASE_FILE" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
@@ -150,7 +154,7 @@ jobs:
           3. use Soft Reboot from KernelSU Manager once;
           4. use the module Action button for read-only verification.
 
-          The module does not call KernelSU soft reboot, targeted zygote restart, device reboot, or destructive recovery commands.
+          This fork is intentionally arm64-only. The module does not call KernelSU soft reboot, targeted zygote restart, device reboot, or destructive recovery commands.
 
           Source commit: ${GITHUB_SHA}
           EOF
