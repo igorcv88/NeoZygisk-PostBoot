@@ -3,5 +3,5 @@ name=${moduleName}
 version=${versionName}
 versionCode=${versionCode}
 author=JingMatrix, maintained by igorcv88
-description=Hardware-validated PostBoot build with a DEFEX-safe /dev runtime, idempotent monitor bootstrap, and restart-free verification after an external KernelSU Manager Soft Reboot.
+description=PostBoot RC with DEFEX-safe /dev runtime, live generation checks, stale-status prevention, and full-reboot fail-closed handling after provider updates or zygote crashes.
 updateJson=${updateJson}
