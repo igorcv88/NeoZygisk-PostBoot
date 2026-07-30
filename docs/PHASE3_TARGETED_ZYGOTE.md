@@ -1,84 +1,107 @@
-# Phase 3 — one-shot targeted zygote activation
+# Phase 3.1 — external KernelSU lifecycle verification
 
-## Goal
+## Hardware conclusion
 
-Activate a fresh 64-bit zygote under the already healthy NeoZygisk init monitor without invoking KernelSU's global soft reboot.
+The original Phase 3 experiment used an explicitly gated `setprop ctl.restart zygote` request. On the target Galaxy S25 Ultra SM-S938B running S938BXXSBCZG3, that path restarted Android userspace into Samsung's `Device Services Uninstalled` failure state and required a full device reboot for recovery.
 
-Phase 2 proved that the monitor can be staged under `/dev/.neozygisk`, reparented to PID 1, and attached to init on the target Galaxy S25 Ultra. Phase 3 adds one explicitly gated activation step that asks Android init to restart only the `zygote` service and then verifies that the replacement zygote was injected.
+That activation model is withdrawn. The module must not restart zygote, Android userspace, or the device by itself.
 
-## Activation model
+A clean hardware sequence was then validated successfully:
 
-`postboot-activate.sh start` launches a detached native shell so the verifier survives the temporary Android UI and `system_server` restart. The worker performs the following sequence:
+1. perform a full reboot to clear the broken userspace state;
+2. run the simple Root-My-Galaxy exploit to restore temporary KernelSU root;
+3. open KernelSU Manager and use its **Soft Reboot** action;
+4. allow KernelSU to execute the normal module lifecycle;
+5. verify the resulting NeoZygisk state without initiating another restart.
 
-1. run the Phase 2 bootstrap idempotently;
-2. require exactly one healthy NeoZygisk monitor attached to PID 1;
-3. record the current `zygote64` and `system_server` PIDs;
-4. skip the restart if the current runtime already reports an injected zygote and a running daemon;
-5. start best-effort absolute-path logcat capture;
-6. issue exactly one `/system/bin/setprop ctl.restart zygote` request;
-7. observe the replacement zygote and `system_server` PIDs;
-8. require the monitor to remain attached to init;
-9. require the generated runtime `module.prop` to report `zygote64` injected and `daemon64` running;
-10. require the Android activity service to become available again;
-11. persist a machine-readable success or failure record under `/data/local/tmp`.
+## Validated target state
 
-## Verification output
+The successful run on `BP4A.251205.006.S938BXXSBCZG3` with kernel `6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k` reported:
 
-The activation status is written to:
+```text
+PHASE=2
+RESULT=HEALTHY_STARTED
+WORK=/dev/.neozygisk
+MONITOR_PID=20323
+INIT_TRACER=20323
+
+monitor: tracing
+zygote64: injected
+daemon64: running
+Root: KernelSU
+Modules (2):
+  zygisk-assistant
+  zygisk_lsposed
+```
+
+The same snapshot also confirmed:
+
+- one `zygisk-ptrace64` monitor reparented to PID 1;
+- `/proc/1/status` `TracerPid` matched the monitor PID;
+- a fresh `zygote64`, `system_server`, and `zygiskd64` were running;
+- `/dev/.neozygisk/cp64.sock` and `/dev/.neozygisk/init_monitor` existed;
+- `/dev/.neozygisk/lib64/libzygisk.so` was mapped directly in the live zygote;
+- NeoZygisk, Zygisk Assistant, and LSPosed were operational.
+
+## Phase 3.1 behavior
+
+`postboot-activate.sh` is retained for compatibility, but it is now a read-only verifier. The accepted commands are:
+
+```text
+postboot-activate.sh verify
+postboot-activate.sh status
+```
+
+The legacy aliases `start` and `activate` also perform verification only. They do not initiate any lifecycle action.
+
+The verifier checks:
+
+1. the Phase 2 monitor is healthy;
+2. the monitor PID matches init's `TracerPid`;
+3. `zygote64`, `system_server`, and `zygiskd64` are present;
+4. the runtime `module.prop` reports zygote injection and a running daemon;
+5. the activity service is available;
+6. `/dev/.neozygisk/cp64.sock` exists;
+7. the DEFEX-safe library is mapped in the live zygote.
+
+A successful result is written to:
 
 ```text
 /data/local/tmp/neozygisk-postboot-phase3.status
 ```
 
-A successful run reports:
+with the core fields:
 
 ```text
-PHASE=3
+PHASE=3.1
 RESULT=INJECTION_VERIFIED
-GLOBAL_SOFT_REBOOT_USED=0
-TARGETED_RESTART_REQUESTED=1
+RESTART_TRIGGERED_BY_MODULE=0
+TARGETED_ZYGOTE_RESTART_USED=0
+GLOBAL_SOFT_REBOOT_USED_BY_MODULE=0
+MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=1
 MONITOR_HEALTHY=1
-ZYGOTE_OLD_PID=<old>
-ZYGOTE_NEW_PID=<new>
-SYSTEM_SERVER_OLD_PID=<old>
-SYSTEM_SERVER_NEW_PID=<new>
 RUNTIME_PROP_INJECTED=1
 RUNTIME_PROP_DAEMON_RUNNING=1
-ACTIVITY_READY=1
+CP64_SOCKET_READY=1
+LIBRARY_MAPPED_IN_ZYGOTE=1
 ```
 
-Detailed logs are written to:
+If the monitor is healthy but injection is not active, the verifier reports:
 
 ```text
-/data/local/tmp/neozygisk-postboot-phase3.log
-/data/local/tmp/neozygisk-postboot-phase3-logcat.txt
+RESULT=WAITING_FOR_KERNELSU_SOFT_REBOOT
 ```
 
-## Safety boundaries
+and performs no recovery action.
 
-Phase 3 deliberately does not:
+## Safety boundary
 
-- call `ksud soft-reboot`;
-- reboot the kernel or device;
-- automatically run from `post-fs-data.sh` or `service.sh`;
-- retry the targeted restart;
-- kill zygote, `system_server`, the monitor, or the daemon;
-- add recovery or watchdog behavior;
-- alter NeoZygisk's injector, daemon protocol, module loading, map spoofing, namespace handling, or trace cleaning.
+The packaged module must contain none of the following:
 
-The upstream monitor's own injection and crash-loop behavior remains unchanged. The Phase 3 shell verifier only observes and records the result.
+- `ksud soft-reboot`;
+- `ctl.restart` or `setprop ctl.restart`;
+- kernel or device reboot commands;
+- zygote, system_server, monitor, or daemon killing;
+- automatic recovery or watchdog behavior.
 
-## Hardware acceptance criteria
-
-On the target SM-S938B / S938BXXSBCZG3 temporary-KernelSU session:
-
-1. Phase 2 is healthy before activation.
-2. Android userspace visibly restarts once, but KernelSU root remains active.
-3. `zygote64` and `system_server` receive new PIDs.
-4. The same single monitor remains attached to PID 1.
-5. `/dev/.neozygisk/module.prop` reports the 64-bit zygote as injected and daemon as running.
-6. the activity service returns.
-7. the Phase 3 status reports `INJECTION_VERIFIED`.
-8. no KernelSU global soft reboot is executed.
-
-Only after these criteria pass should a later phase add automatic recovery, watchdog behavior, or integration into the Root-My-Galaxy advanced flow.
+The known-good lifecycle is external and user initiated through KernelSU Manager from a clean post-exploit session. Phase 3.1 only verifies the resulting state.
