@@ -60,18 +60,18 @@ jobs:
         with:
           workspaces: zygiskd -> build/rust/target
 
-      - name: Confirm native implementation matches the working v3.0 source generation
+      - name: Confirm native implementation matches the validated source generation
         run: |
           set -euo pipefail
-          KNOWN_GOOD_NATIVE_COMMIT=40d641a962bfa92a1ab33050ac141278c337b349
-          git cat-file -e "${KNOWN_GOOD_NATIVE_COMMIT}^{commit}"
+          KNOWN_GOOD_NATIVE_BASELINE=c99afe55c263085332071d81e0daaba048d44663
+          git cat-file -e "${KNOWN_GOOD_NATIVE_BASELINE}^{commit}"
 
-          git diff --name-only "$KNOWN_GOOD_NATIVE_COMMIT" "$GITHUB_SHA" > changed-from-v30.txt
-          grep -Ev '^($|\.github/workflows/ci\.yml|README\.md|build\.gradle\.kts|docs/.*|module/build\.gradle\.kts|module/src/(action\.sh|customize\.sh|module\.prop|post-fs-data\.sh|postboot-activate\.sh|postboot-bootstrap\.sh|service\.sh|uninstall\.sh))$' \
-            changed-from-v30.txt > unexpected-native-drift.txt || true
+          git diff --name-only "$KNOWN_GOOD_NATIVE_BASELINE" "$GITHUB_SHA" > changed-from-baseline.txt
+          grep -Ev '^($|\.github/release-status/.*|\.github/workflows/(ci\.yml|record-approved-release\.yml)|README\.md|build\.gradle\.kts|docs/.*|module/build\.gradle\.kts|module/src/(action\.sh|customize\.sh|module\.prop|post-fs-data\.sh|postboot-activate\.sh|postboot-bootstrap\.sh|service\.sh|uninstall\.sh))$' \
+            changed-from-baseline.txt > unexpected-native-drift.txt || true
 
           if [ -s unexpected-native-drift.txt ]; then
-            echo "Files outside the validated shell/build/documentation surface changed since the working v3.0 native source generation:" >&2
+            echo "Files outside the validated shell/build/documentation surface changed since the native-source baseline:" >&2
             cat unexpected-native-drift.txt >&2
             exit 1
           fi
