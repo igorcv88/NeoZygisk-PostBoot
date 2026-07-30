@@ -30,6 +30,12 @@ Phase 1 does not:
 
 Those behaviors belong to later phases and must be tested separately.
 
+## Zygisk Next control build
+
+A downgrade to the last GPL Zygisk Next build is not required before Phase 1. Its source already establishes that the older implementation stages its runtime outside `/data/adb`, which is the specific behavior being reproduced here. A hardware test of that old binary would not isolate the path variable cleanly because it may lack newer Android 16, BTI, linker, or kernel compatibility work present in current providers.
+
+The old GPL build should therefore be used only as a secondary control if this Phase 1 NeoZygisk build fails before injection. The preferred first test is the modern NeoZygisk injector with only the runtime path changed.
+
 ## Build acceptance criteria
 
 A release and debug ZIP must build successfully. In each release ZIP:
