@@ -73,7 +73,7 @@ jobs:
           grep -F 'id=zygisksu' phase3-check/module.prop
 
           grep -F '/system/bin/setprop ctl.restart zygote' phase3-check/postboot-activate.sh
-          grep -F 'RESULT=INJECTION_VERIFIED' phase3-check/postboot-activate.sh
+          grep -F 'write_status INJECTION_VERIFIED' phase3-check/postboot-activate.sh
           grep -F 'GLOBAL_SOFT_REBOOT_USED=0' phase3-check/postboot-activate.sh
           grep -F 'ZYGOTE_RESTART_COUNT=' phase3-check/postboot-activate.sh
 
