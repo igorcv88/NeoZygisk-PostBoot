@@ -57,7 +57,7 @@ androidComponents.onVariants { variant ->
         into(moduleDir)
         from("${rootProject.projectDir}/README.md")
         from("$projectDir/src") {
-            exclude("module.prop", "action.sh", "customize.sh", "post-fs-data.sh", "postboot-bootstrap.sh", "service.sh", "uninstall.sh", "zygisk-ctl.sh")
+            exclude("module.prop", "action.sh", "customize.sh", "post-fs-data.sh", "postboot-activate.sh", "postboot-bootstrap.sh", "service.sh", "uninstall.sh", "zygisk-ctl.sh")
             filter<FixCrLfFilter>("eol" to FixCrLfFilter.CrLf.newInstance("lf"))
         }
         from("$projectDir/src") {
@@ -71,7 +71,7 @@ androidComponents.onVariants { variant ->
             )
         }
         from("$projectDir/src") {
-            include("action.sh", "customize.sh", "post-fs-data.sh", "postboot-bootstrap.sh", "service.sh", "uninstall.sh", "zygisk-ctl.sh")
+            include("action.sh", "customize.sh", "post-fs-data.sh", "postboot-activate.sh", "postboot-bootstrap.sh", "service.sh", "uninstall.sh", "zygisk-ctl.sh")
             val tokens = mapOf(
                 "DEBUG" to if (buildTypeLowered == "debug") "true" else "false",
                 "MIN_APATCH_VERSION" to "$minAPatchVersion",
