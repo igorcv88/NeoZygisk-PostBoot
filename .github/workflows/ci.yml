@@ -61,6 +61,28 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew zipRelease zipDebug -Porg.gradle.parallel=true -Porg.gradle.vfs.watch=true -Dorg.gradle.jvmargs=-Xmx2048m
 
+      - name: Verify Phase 1 DEFEX-safe runtime relocation
+        run: |
+          set -eu
+          RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
+          test -n "$RELEASE_ZIP"
+          rm -rf phase1-check
+          mkdir phase1-check
+          unzip -q "$RELEASE_ZIP" -d phase1-check
+
+          grep -F 'TMP_PATH=/debug_ramdisk/neozygisk' phase1-check/post-fs-data.sh
+          grep -F 'export TMP_PATH=/debug_ramdisk/neozygisk' phase1-check/uninstall.sh
+          grep -F 'cat /debug_ramdisk/neozygisk/module.prop' phase1-check/action.sh
+
+          for binary in phase1-check/lib/*/libzygisk_ptrace.so; do
+            strings "$binary" | grep -F '/debug_ramdisk/neozygisk'
+          done
+
+          if grep -R -a -F '/data/adb/neozygisk' phase1-check; then
+            echo 'Legacy /data/adb/neozygisk runtime path remains in the built module.' >&2
+            exit 1
+          fi
+
       # ====================================================================
       # 3. PREPARE AND UPLOAD ARTIFACTS
       # ====================================================================
