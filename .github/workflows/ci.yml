@@ -52,48 +52,74 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew zipRelease zipDebug -Porg.gradle.parallel=true -Porg.gradle.vfs.watch=true -Dorg.gradle.jvmargs=-Xmx2048m
 
-      - name: Verify PostBoot Phase 2 module
+      - name: Verify PostBoot Phase 3 module
         run: |
           set -eu
           RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
           test -n "$RELEASE_ZIP"
-          rm -rf phase2-check
-          mkdir phase2-check
-          unzip -q "$RELEASE_ZIP" -d phase2-check
+          rm -rf phase3-check
+          mkdir phase3-check
+          unzip -q "$RELEASE_ZIP" -d phase3-check
 
-          test -f phase2-check/postboot-bootstrap.sh
-          grep -F 'WORK=/dev/.neozygisk' phase2-check/postboot-bootstrap.sh
-          grep -F 'STAGE_ERROR=' phase2-check/postboot-bootstrap.sh
-          grep -F 'postboot-bootstrap.sh" ensure' phase2-check/post-fs-data.sh
-          grep -F 'postboot-bootstrap.sh" ensure' phase2-check/service.sh
-          grep -F "extract \"\$ZIPFILE\" 'postboot-bootstrap.sh'" phase2-check/customize.sh
-          grep -F 'id=zygisksu' phase2-check/module.prop
+          test -f phase3-check/postboot-bootstrap.sh
+          test -f phase3-check/postboot-activate.sh
+          grep -F 'WORK=/dev/.neozygisk' phase3-check/postboot-bootstrap.sh
+          grep -F 'WORK=/dev/.neozygisk' phase3-check/postboot-activate.sh
+          grep -F 'STAGE_ERROR=' phase3-check/postboot-bootstrap.sh
+          grep -F 'postboot-bootstrap.sh" ensure' phase3-check/post-fs-data.sh
+          grep -F 'postboot-bootstrap.sh" ensure' phase3-check/service.sh
+          grep -F "extract \"\$ZIPFILE\" 'postboot-bootstrap.sh'" phase3-check/customize.sh
+          grep -F "extract \"\$ZIPFILE\" 'postboot-activate.sh'" phase3-check/customize.sh
+          grep -F 'id=zygisksu' phase3-check/module.prop
 
-          for script in phase2-check/*.sh; do
+          grep -F '/system/bin/setprop ctl.restart zygote' phase3-check/postboot-activate.sh
+          grep -F 'RESULT=INJECTION_VERIFIED' phase3-check/postboot-activate.sh
+          grep -F 'GLOBAL_SOFT_REBOOT_USED=0' phase3-check/postboot-activate.sh
+          grep -F 'ZYGOTE_RESTART_COUNT=' phase3-check/postboot-activate.sh
+
+          RESTART_COUNT=$(grep -R -a -F '/system/bin/setprop ctl.restart zygote' phase3-check/*.sh | wc -l)
+          test "$RESTART_COUNT" -eq 1
+
+          if grep -F 'postboot-activate.sh' phase3-check/post-fs-data.sh phase3-check/service.sh; then
+            echo 'Phase 3 activation must remain explicitly gated and must not run from service scripts yet.' >&2
+            exit 1
+          fi
+
+          for script in phase3-check/*.sh; do
             sh -n "$script"
           done
 
-          for binary in phase2-check/lib/*/libzygisk_ptrace.so; do
+          for binary in phase3-check/lib/*/libzygisk_ptrace.so; do
             strings "$binary" | grep -F '/dev/.neozygisk'
           done
 
-          if grep -R -a -F '/data/adb/neozygisk' phase2-check; then
+          if grep -R -a -F '/data/adb/neozygisk' phase3-check; then
             echo 'Legacy /data/adb/neozygisk runtime path remains in the built module.' >&2
             exit 1
           fi
 
-          if grep -R -a -F '/debug_ramdisk/neozygisk' phase2-check; then
+          if grep -R -a -F '/debug_ramdisk/neozygisk' phase3-check; then
             echo 'Unavailable /debug_ramdisk runtime path remains in the built module.' >&2
             exit 1
           fi
 
-          if grep -F '/system/bin/awk' phase2-check/postboot-bootstrap.sh; then
-            echo 'The bootstrap still depends on awk, which is unavailable on the target environment.' >&2
+          if grep -R -a -F '/system/bin/awk' phase3-check/*.sh; then
+            echo 'A packaged script depends on awk, which is unavailable on the target environment.' >&2
             exit 1
           fi
 
-          if grep -R -a -E 'ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart' phase2-check; then
-            echo 'A forbidden userspace or zygote restart command is present in Phase 2.' >&2
+          if grep -R -a -E 'ksud[[:space:]]+soft-reboot' phase3-check; then
+            echo 'KernelSU global soft reboot is forbidden in Phase 3.' >&2
+            exit 1
+          fi
+
+          if grep -R -a --exclude=postboot-activate.sh -E 'ctl\.restart|setprop[[:space:]]+ctl\.restart' phase3-check; then
+            echo 'A zygote/userspace restart escaped the explicitly gated Phase 3 activation script.' >&2
+            exit 1
+          fi
+
+          if grep -a -E 'SIGKILL|kill[[:space:]]+-9|ctl\.stop|setprop[[:space:]]+ctl\.stop' phase3-check/postboot-activate.sh; then
+            echo 'Phase 3 must not add destructive recovery or process killing.' >&2
             exit 1
           fi
 
