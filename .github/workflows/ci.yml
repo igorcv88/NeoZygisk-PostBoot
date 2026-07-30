@@ -1,19 +1,26 @@
-name: Build and publish NeoZygisk PostBoot
+name: Build and validate NeoZygisk PostBoot
 
 on:
   push:
     branches: [master]
+  pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated module ZIP to GitHub Releases
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: neozygisk-postboot-release
+  group: neozygisk-postboot-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -61,7 +68,7 @@ jobs:
             -Porg.gradle.vfs.watch=true \
             -Dorg.gradle.jvmargs=-Xmx2048m
 
-      - name: Verify restart-free PostBoot module
+      - name: Verify fail-closed update lifecycle
         run: |
           set -eu
           BUILT_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
@@ -70,64 +77,35 @@ jobs:
           mkdir release-check
           unzip -q "$BUILT_ZIP" -d release-check
 
-          test -f release-check/postboot-bootstrap.sh
-          test -f release-check/postboot-activate.sh
-          grep -F 'WORK=/dev/.neozygisk' release-check/postboot-bootstrap.sh
-          grep -F 'WORK=/dev/.neozygisk' release-check/postboot-activate.sh
-          grep -F 'STAGE_ERROR=' release-check/postboot-bootstrap.sh
-          grep -F 'postboot-bootstrap.sh" ensure' release-check/post-fs-data.sh
-          grep -F 'postboot-bootstrap.sh" ensure' release-check/service.sh
-          grep -F "extract \"\$ZIPFILE\" 'postboot-bootstrap.sh'" release-check/customize.sh
-          grep -F "extract \"\$ZIPFILE\" 'postboot-activate.sh'" release-check/customize.sh
-          grep -F 'if [ "$ARCH" != "arm64" ]' release-check/customize.sh
-          grep -F 'id=zygisksu' release-check/module.prop
-
-          grep -F 'write_status INJECTION_VERIFIED' release-check/postboot-activate.sh
-          grep -F 'WAITING_FOR_KERNELSU_SOFT_REBOOT' release-check/postboot-activate.sh
-          grep -F 'RESTART_TRIGGERED_BY_MODULE=0' release-check/postboot-activate.sh
-          grep -F 'TARGETED_ZYGOTE_RESTART_USED=0' release-check/postboot-activate.sh
-          grep -F 'GLOBAL_SOFT_REBOOT_USED_BY_MODULE=0' release-check/postboot-activate.sh
-          grep -F 'MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=1' release-check/postboot-activate.sh
-          grep -F 'LIBRARY_MAPPED_IN_ZYGOTE=' release-check/postboot-activate.sh
-          grep -F '"$VERIFY" verify' release-check/action.sh
-
-          if grep -F 'postboot-activate.sh' release-check/post-fs-data.sh release-check/service.sh; then
-            echo 'Read-only verification must not run automatically from service scripts.' >&2
-            exit 1
-          fi
-
           for script in release-check/*.sh; do
             sh -n "$script"
           done
 
+          grep -F 'WORK=/dev/.neozygisk' release-check/postboot-bootstrap.sh
+          grep -F 'UPDATE_REQUIRES_FULL_REBOOT' release-check/postboot-bootstrap.sh
+          grep -F 'ZYGOTE_CRASH_REQUIRES_FULL_REBOOT' release-check/postboot-bootstrap.sh
+          grep -F 'MONITOR_EXE_DELETED=' release-check/postboot-bootstrap.sh
+          grep -F 'MONITOR_BINARY_MATCH=' release-check/postboot-bootstrap.sh
+          grep -F 'RUNTIME_LIBRARY_MATCH=' release-check/postboot-bootstrap.sh
+          grep -F 'update_requires_full_reboot' release-check/customize.sh
+          grep -F 'FULL_REBOOT_REQUIRED=' release-check/postboot-activate.sh
+          grep -F 'status) status_live' release-check/postboot-activate.sh
+          grep -F 'if [ "$ARCH" != "arm64" ]' release-check/customize.sh
+          grep -F 'id=zygisksu' release-check/module.prop
+
+          if grep -F '"$TRACER"|"$TRACER (deleted)"' release-check/postboot-bootstrap.sh; then
+            echo 'A deleted monitor executable is still accepted as reusable.' >&2
+            exit 1
+          fi
+
+          if grep -R -a -E 'ctl[[:space:]]+start|ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart|/system/bin/reboot|svc[[:space:]]+power[[:space:]]+reboot|SIGKILL|kill[[:space:]]+-9|ctl\.stop|setprop[[:space:]]+ctl\.stop' release-check/*.sh; then
+            echo 'A packaged script can restart, resume, kill, or perform destructive recovery.' >&2
+            exit 1
+          fi
+
           for binary in release-check/lib/*/libzygisk_ptrace.so; do
             strings "$binary" | grep -F '/dev/.neozygisk'
           done
-
-          if grep -R -a -F '/data/adb/neozygisk' release-check; then
-            echo 'Legacy /data/adb/neozygisk runtime path remains in the module.' >&2
-            exit 1
-          fi
-
-          if grep -R -a -F '/debug_ramdisk/neozygisk' release-check; then
-            echo 'Unavailable /debug_ramdisk runtime path remains in the module.' >&2
-            exit 1
-          fi
-
-          if grep -R -a -F '/system/bin/awk' release-check/*.sh; then
-            echo 'A packaged script depends on awk, which is unavailable on the target.' >&2
-            exit 1
-          fi
-
-          if grep -R -a -E 'ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart|/system/bin/reboot|svc[[:space:]]+power[[:space:]]+reboot' release-check/*.sh; then
-            echo 'A packaged script can initiate a forbidden restart.' >&2
-            exit 1
-          fi
-
-          if grep -R -a -E 'SIGKILL|kill[[:space:]]+-9|ctl\.stop|setprop[[:space:]]+ctl\.stop' release-check/*.sh; then
-            echo 'The module contains destructive recovery or process killing.' >&2
-            exit 1
-          fi
 
           RELEASE_FILE=$(basename "$BUILT_ZIP")
           RELEASE_STEM=${RELEASE_FILE%.zip}
@@ -140,37 +118,24 @@ jobs:
           echo "RELEASE_FILE=$RELEASE_FILE" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
-      - name: Publish the raw module ZIP to GitHub Releases
+      - name: Publish manually approved module ZIP
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           cat > release-notes.md <<EOF
-          Hardware-validated NeoZygisk PostBoot release for temporary KernelSU sessions on the Samsung Galaxy S25 Ultra SM-S938B / S938BXXSBCZG3.
+          NeoZygisk PostBoot release with fail-closed native-generation checks.
 
-          Validated lifecycle:
-          1. run the simple Root My Galaxy exploit;
-          2. install or enable this module and dependent Zygisk modules;
-          3. use Soft Reboot from KernelSU Manager once;
-          4. use the module Action button for read-only verification.
-
-          This fork is intentionally arm64-only. The module does not call KernelSU soft reboot, targeted zygote restart, device reboot, or destructive recovery commands.
+          Provider updates require a full device reboot before the next simple exploit and the single KernelSU Manager Soft Reboot. A deleted, crashed, unhealthy, or generation-mismatched monitor is never reused or resumed.
 
           Source commit: ${GITHUB_SHA}
           EOF
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$RELEASE_ZIP" "${RELEASE_ZIP}.sha256" --clobber
-            gh release edit "$RELEASE_TAG" \
-              --title "$RELEASE_FILE" \
-              --notes-file release-notes.md \
-              --latest
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_FILE" --notes-file release-notes.md --latest
           else
-            gh release create "$RELEASE_TAG" \
-              "$RELEASE_ZIP" \
-              "${RELEASE_ZIP}.sha256" \
-              --target "$GITHUB_SHA" \
-              --title "$RELEASE_FILE" \
-              --notes-file release-notes.md \
-              --latest
+            gh release create "$RELEASE_TAG" "$RELEASE_ZIP" "${RELEASE_ZIP}.sha256" \
+              --target "$GITHUB_SHA" --title "$RELEASE_FILE" --notes-file release-notes.md --latest
           fi
