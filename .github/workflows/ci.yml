@@ -113,6 +113,15 @@ jobs:
           grep -F 'version=v2.3-postboot.3.2' release-check/module.prop
           grep -F 'id=zygisksu' release-check/module.prop
 
+          VERSION_CODE=$(sed -n 's/^versionCode=//p' release-check/module.prop | head -n 1)
+          case "$VERSION_CODE" in
+            ''|*[!0-9]*) echo "Invalid module versionCode: $VERSION_CODE" >&2; exit 1 ;;
+          esac
+          if [ "$VERSION_CODE" -le 347 ]; then
+            echo "Stable versionCode must be newer than the installed recovery build 347" >&2
+            exit 1
+          fi
+
           if grep -R -a -E 'ctl[[:space:]]+start|ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart|/system/bin/reboot|svc[[:space:]]+power[[:space:]]+reboot|SIGKILL|kill[[:space:]]+-9|ctl\.stop|setprop[[:space:]]+ctl\.stop' release-check/*.sh; then
             echo 'A packaged script can restart, resume, kill, or perform destructive recovery.' >&2
             exit 1
