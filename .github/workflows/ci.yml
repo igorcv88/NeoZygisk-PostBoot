@@ -60,6 +60,22 @@ jobs:
         with:
           workspaces: zygiskd -> build/rust/target
 
+      - name: Confirm native implementation matches the working v3.0 source generation
+        run: |
+          set -euo pipefail
+          KNOWN_GOOD_NATIVE_COMMIT=40d641a962bfa92a1ab33050ac141278c337b349
+          git cat-file -e "${KNOWN_GOOD_NATIVE_COMMIT}^{commit}"
+
+          git diff --name-only "$KNOWN_GOOD_NATIVE_COMMIT" "$GITHUB_SHA" > changed-from-v30.txt
+          grep -Ev '^($|\.github/workflows/ci\.yml|README\.md|build\.gradle\.kts|docs/.*|module/build\.gradle\.kts|module/src/(action\.sh|customize\.sh|module\.prop|post-fs-data\.sh|postboot-activate\.sh|postboot-bootstrap\.sh|service\.sh|uninstall\.sh))$' \
+            changed-from-v30.txt > unexpected-native-drift.txt || true
+
+          if [ -s unexpected-native-drift.txt ]; then
+            echo "Files outside the validated shell/build/documentation surface changed since the working v3.0 native source generation:" >&2
+            cat unexpected-native-drift.txt >&2
+            exit 1
+          fi
+
       - name: Build release module ZIP
         run: |
           chmod +x gradlew
@@ -94,6 +110,7 @@ jobs:
           grep -F 'FULL_REBOOT_REQUIRED=' release-check/postboot-activate.sh
           grep -F 'status) status_live' release-check/postboot-activate.sh
           grep -F 'if [ "$ARCH" != "arm64" ]' release-check/customize.sh
+          grep -F 'version=v2.3-postboot.3.2' release-check/module.prop
           grep -F 'id=zygisksu' release-check/module.prop
 
           if grep -R -a -E 'ctl[[:space:]]+start|ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart|/system/bin/reboot|svc[[:space:]]+power[[:space:]]+reboot|SIGKILL|kill[[:space:]]+-9|ctl\.stop|setprop[[:space:]]+ctl\.stop' release-check/*.sh; then
@@ -111,21 +128,34 @@ jobs:
           cp "$BUILT_ZIP" "$RELEASE_FILE"
           sha256sum "$RELEASE_FILE" | tee "${RELEASE_FILE}.sha256"
           unzip -t "$RELEASE_FILE"
+          sha256sum -c "${RELEASE_FILE}.sha256"
 
           echo "RELEASE_ZIP=$RELEASE_FILE" >> "$GITHUB_ENV"
           echo "RELEASE_FILE=$RELEASE_FILE" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
-      - name: Publish manually approved module ZIP
-        if: github.event_name == 'workflow_dispatch' && inputs.publish
+      - name: Publish approved raw module ZIP to GitHub Releases
+        if: >-
+          (github.event_name == 'workflow_dispatch' && inputs.publish) ||
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[release neozygisk]'))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           cat > release-notes.md <<EOF
-          NeoZygisk PostBoot release with fail-closed native-generation checks.
+          Hardware-validated NeoZygisk PostBoot 3.2 release for temporary KernelSU sessions on the Samsung Galaxy S25 Ultra SM-S938B / S938BXXSBCZG3.
 
-          Provider updates require a full device reboot before the next simple exploit and the single KernelSU Manager Soft Reboot. A deleted, crashed, unhealthy, or generation-mismatched monitor is never reused or resumed.
+          Validated recovery lifecycle:
+          1. full device reboot;
+          2. simple Root My Galaxy exploit;
+          3. one user-initiated Soft Reboot from KernelSU Manager;
+          4. live same-generation verification.
+
+          The successful hardware result reported INJECTION_VERIFIED, a single monitor attached to init, matching live/installed native generations, injected zygote64, running zygiskd64, working Zygisk Assistant and LSPosed, and no module-initiated restart.
+
+          Provider updates must never be activated by Soft Reboot while an older monitor remains alive in the same kernel boot. Install the update, perform a full device reboot, rerun the simple exploit, then use KernelSU Manager Soft Reboot once.
+
+          The module contains no KernelSU Soft Reboot command, targeted zygote restart, device reboot, process kill or in-session recovery path.
 
           Source commit: ${GITHUB_SHA}
           EOF
