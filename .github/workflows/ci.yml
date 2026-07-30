@@ -62,7 +62,8 @@ jobs:
           unzip -q "$RELEASE_ZIP" -d phase2-check
 
           test -f phase2-check/postboot-bootstrap.sh
-          grep -F 'WORK=/debug_ramdisk/neozygisk' phase2-check/postboot-bootstrap.sh
+          grep -F 'WORK=/dev/.neozygisk' phase2-check/postboot-bootstrap.sh
+          grep -F 'STAGE_ERROR=' phase2-check/postboot-bootstrap.sh
           grep -F 'postboot-bootstrap.sh" ensure' phase2-check/post-fs-data.sh
           grep -F 'postboot-bootstrap.sh" ensure' phase2-check/service.sh
           grep -F "extract \"\$ZIPFILE\" 'postboot-bootstrap.sh'" phase2-check/customize.sh
@@ -73,11 +74,21 @@ jobs:
           done
 
           for binary in phase2-check/lib/*/libzygisk_ptrace.so; do
-            strings "$binary" | grep -F '/debug_ramdisk/neozygisk'
+            strings "$binary" | grep -F '/dev/.neozygisk'
           done
 
           if grep -R -a -F '/data/adb/neozygisk' phase2-check; then
             echo 'Legacy /data/adb/neozygisk runtime path remains in the built module.' >&2
+            exit 1
+          fi
+
+          if grep -R -a -F '/debug_ramdisk/neozygisk' phase2-check; then
+            echo 'Unavailable /debug_ramdisk runtime path remains in the built module.' >&2
+            exit 1
+          fi
+
+          if grep -F '/system/bin/awk' phase2-check/postboot-bootstrap.sh; then
+            echo 'The bootstrap still depends on awk, which is unavailable on the target environment.' >&2
             exit 1
           fi
 
