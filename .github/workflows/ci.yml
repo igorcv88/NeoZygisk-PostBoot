@@ -13,14 +13,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ====================================================================
-      # 1. SETUP ENVIRONMENT
-      # ====================================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: "recursive"
-          fetch-depth: 0 # Needed for versioning from git history
+          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -40,9 +37,6 @@ jobs:
           rustup target add armv7-linux-androideabi
 
       - name: Install cargo-ndk
-        # The zygiskd build invokes `cargo ndk` to cross-compile the daemon.
-        # Intentionally unpinned: the build uses the `--platform` flag, which is
-        # stable across cargo-ndk releases. See the commit message for the caveat.
         run: cargo install cargo-ndk --locked
 
       - name: Setup Ccache for faster builds
@@ -55,64 +49,69 @@ jobs:
         with:
           workspaces: zygiskd -> build/rust/target
 
-      # ====================================================================
-      # 2. CONFIGURE AND BUILD
-      # ====================================================================
       - name: Build with Gradle
         run: ./gradlew zipRelease zipDebug -Porg.gradle.parallel=true -Porg.gradle.vfs.watch=true -Dorg.gradle.jvmargs=-Xmx2048m
 
-      - name: Verify Phase 1 DEFEX-safe runtime relocation
+      - name: Verify PostBoot Phase 2 module
         run: |
           set -eu
           RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
           test -n "$RELEASE_ZIP"
-          rm -rf phase1-check
-          mkdir phase1-check
-          unzip -q "$RELEASE_ZIP" -d phase1-check
+          rm -rf phase2-check
+          mkdir phase2-check
+          unzip -q "$RELEASE_ZIP" -d phase2-check
 
-          grep -F 'TMP_PATH=/debug_ramdisk/neozygisk' phase1-check/post-fs-data.sh
-          grep -F 'export TMP_PATH=/debug_ramdisk/neozygisk' phase1-check/uninstall.sh
-          grep -F 'cat /debug_ramdisk/neozygisk/module.prop' phase1-check/action.sh
+          test -f phase2-check/postboot-bootstrap.sh
+          grep -F 'WORK=/debug_ramdisk/neozygisk' phase2-check/postboot-bootstrap.sh
+          grep -F 'postboot-bootstrap.sh" ensure' phase2-check/post-fs-data.sh
+          grep -F 'postboot-bootstrap.sh" ensure' phase2-check/service.sh
+          grep -F "extract \"\$ZIPFILE\" 'postboot-bootstrap.sh'" phase2-check/customize.sh
+          grep -F 'id=zygisksu' phase2-check/module.prop
 
-          for binary in phase1-check/lib/*/libzygisk_ptrace.so; do
+          for script in phase2-check/*.sh; do
+            sh -n "$script"
+          done
+
+          for binary in phase2-check/lib/*/libzygisk_ptrace.so; do
             strings "$binary" | grep -F '/debug_ramdisk/neozygisk'
           done
 
-          if grep -R -a -F '/data/adb/neozygisk' phase1-check; then
+          if grep -R -a -F '/data/adb/neozygisk' phase2-check; then
             echo 'Legacy /data/adb/neozygisk runtime path remains in the built module.' >&2
             exit 1
           fi
 
-      # ====================================================================
-      # 3. PREPARE AND UPLOAD ARTIFACTS
-      # ====================================================================
+          if grep -R -a -E 'ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart' phase2-check; then
+            echo 'A forbidden userspace or zygote restart command is present in Phase 2.' >&2
+            exit 1
+          fi
+
       - name: Prepare build artifacts
         if: success()
         id: prepare_artifacts
         run: |
-          RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip')
-          DEBUG_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-debug.zip')
+          RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
+          DEBUG_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-debug.zip' | head -n 1)
 
           RELEASE_NAME=$(basename "$RELEASE_ZIP" .zip)
           DEBUG_NAME=$(basename "$DEBUG_ZIP" .zip)
 
-          echo "RELEASE_NAME=${RELEASE_NAME}" >> $GITHUB_OUTPUT
-          echo "DEBUG_NAME=${DEBUG_NAME}" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "DEBUG_NAME=${DEBUG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_ZIP=${RELEASE_ZIP}" >> "$GITHUB_OUTPUT"
+          echo "DEBUG_ZIP=${DEBUG_ZIP}" >> "$GITHUB_OUTPUT"
 
-          unzip "$RELEASE_ZIP" -d "release-artifact"
-          unzip "$DEBUG_ZIP" -d "debug-artifact"
-
-      - name: Upload Release Artifact
+      - name: Upload Release Module ZIP
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.prepare_artifacts.outputs.RELEASE_NAME }}
-          path: release-artifact/
+          path: ${{ steps.prepare_artifacts.outputs.RELEASE_ZIP }}
 
-      - name: Upload Debug Artifact
+      - name: Upload Debug Module ZIP
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.prepare_artifacts.outputs.DEBUG_NAME }}
-          path: debug-artifact/
+          path: ${{ steps.prepare_artifacts.outputs.DEBUG_ZIP }}
 
       - name: Upload Release Symbols
         uses: actions/upload-artifact@v4
