@@ -1,0 +1,5 @@
+conclusion=cancelled
+run_id=30556950421
+head_sha=d3cde007aa6fca9512ca2debad739c20eefb4279
+event=push
+url=https://github.com/igorcv88/NeoZygisk-PostBoot/actions/runs/30556950421
