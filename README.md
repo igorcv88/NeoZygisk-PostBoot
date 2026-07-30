@@ -1,22 +1,92 @@
 # NeoZygisk PostBoot
 
-NeoZygisk PostBoot is a hardware-validated fork of NeoZygisk for temporary
-KernelSU sessions on the Samsung Galaxy S25 Ultra `SM-S938B` running
-`S938BXXSBCZG3`.
+NeoZygisk PostBoot is an arm64-only fork for temporary KernelSU sessions on the
+Samsung Galaxy S25 Ultra `SM-S938B` running `S938BXXSBCZG3`.
 
-[Download the latest installable module ZIP](https://github.com/igorcv88/NeoZygisk-PostBoot/releases/latest)
+> [!CAUTION]
+> Automatic release publishing is frozen while the 3.2 fail-closed update path
+> is hardware tested. Do not activate a newly installed NeoZygisk provider with
+> KernelSU Soft Reboot while an older monitor is still alive in the same kernel
+> boot.
 
-The release asset is the raw KernelSU/APatch/Magisk module ZIP itself. The
-workflow does not wrap it inside a GitHub Actions artifact archive.
+## Confirmed update regression
 
-## Supported architecture
+A 30 July 2026 hardware test installed a newer provider package while the
+previous v3.0 monitor remained attached to init. The next manual KernelSU Soft
+Reboot left the runtime reporting:
 
-This stable fork is intentionally **arm64-only**. Installation aborts on `arm`,
-`x86`, and `x64` instead of claiming support that the Phase 3.1 verifier and
-hardware validation do not cover. Use upstream NeoZygisk for other
-architectures.
+```text
+monitor: stopped(zygote crashed)
+zygote64: unknown
+daemon64: running
+```
 
-## Validated device
+The previous verifier also printed an old `INJECTION_VERIFIED` snapshot because
+its `status` command did not refresh the live state.
+
+The bootstrap had accepted a monitor whose executable path ended in
+`(deleted)` after module files were replaced. That allowed an old running
+monitor and `/dev` runtime to coexist with a newer installed native generation.
+The 3.2 RC now fails closed instead:
+
+- a deleted monitor executable is never considered healthy;
+- the running tracer hash must match the installed tracer hash;
+- the staged runtime library hash must match the installed library hash;
+- `stopped(zygote crashed)` requires a full device reboot;
+- automatic monitor resume is disabled;
+- `status` performs a live check and overwrites stale success results;
+- installation over a live monitor records the current kernel `boot_id` and
+  requires a full reboot before activation.
+
+## Required lifecycle
+
+### First installation in a clean session
+
+1. Full device reboot.
+2. Run the simple Root My Galaxy exploit and confirm KernelSU is active.
+3. Install NeoZygisk PostBoot and dependent modules.
+4. Use **Soft Reboot** from KernelSU Manager once.
+5. Run the module Action or the live verifier.
+
+### Updating NeoZygisk while a monitor already exists
+
+1. Install the update, but **do not use Soft Reboot in that kernel session**.
+2. Perform a full device reboot.
+3. Run the simple Root My Galaxy exploit again.
+4. Open KernelSU Manager and use **Soft Reboot once**.
+5. Verify the live state.
+
+Do not attempt another Soft Reboot after any `zygote crashed`, deleted-monitor,
+generation-mismatch, or `FULL_REBOOT_REQUIRED` result.
+
+## Live verification
+
+```sh
+su -c '/system/bin/sh /data/adb/modules/zygisksu/postboot-activate.sh status'
+su -c '/system/bin/sh /data/adb/modules/zygisksu/postboot-activate.sh verify'
+```
+
+A healthy 3.2 result includes:
+
+```text
+PHASE=3.2
+RESULT=INJECTION_VERIFIED
+FULL_REBOOT_REQUIRED=0
+MONITOR_HEALTHY=1
+MONITOR_EXE_DELETED=0
+MONITOR_BINARY_MATCH=1
+RUNTIME_LIBRARY_MATCH=1
+RUNTIME_MONITOR_CRASHED=0
+RUNTIME_PROP_INJECTED=1
+RUNTIME_PROP_DAEMON_RUNNING=1
+CP64_SOCKET_READY=1
+LIBRARY_MAPPED_IN_ZYGOTE=1
+```
+
+A provider update in the same kernel session, an unhealthy monitor, or a zygote
+crash produces `FULL_REBOOT_REQUIRED` and performs no recovery action.
+
+## Validated target
 
 ```text
 Build:  BP4A.251205.006.S938BXXSBCZG3
@@ -25,119 +95,52 @@ Root:   temporary KernelSU loaded by Root My Galaxy
 ABI:    arm64-v8a
 ```
 
-Hardware validation confirmed:
+The original clean-session validation confirmed one monitor attached to init,
+an injected `zygote64`, a running `zygiskd64`, Zygisk Assistant and LSPosed,
+`/dev/.neozygisk/cp64.sock`, and the live `/dev/.neozygisk/lib64/libzygisk.so`
+mapping.
 
-- one NeoZygisk monitor attached to PID 1;
-- init's `TracerPid` matching the monitor PID;
-- an injected `zygote64` and running `zygiskd64`;
-- Zygisk Assistant and LSPosed modules loaded;
-- `/dev/.neozygisk/cp64.sock` available;
-- `/dev/.neozygisk/lib64/libzygisk.so` mapped in the live zygote;
-- the Android activity service healthy.
+## DEFEX-safe runtime
 
-## Installation and activation
-
-1. Run the simple exploit from
-   [Root My Galaxy S938B](https://github.com/igorcv88/Root-My-Galaxy-S938B)
-   and confirm that KernelSU is active.
-2. Install this module from KernelSU Manager.
-3. Install or enable dependent modules such as Zygisk Assistant and LSPosed.
-4. Use **Soft Reboot** from KernelSU Manager exactly once.
-5. After Android returns, open the NeoZygisk module Action page or run:
-
-```sh
-su -c '/system/bin/sh /data/adb/modules/zygisksu/postboot-activate.sh verify'
-su -c '/system/bin/sh /data/adb/modules/zygisksu/postboot-activate.sh status'
-```
-
-The helper name is retained for compatibility, but Phase 3.1 is read-only. The
-module itself does not restart zygote, Android userspace, the kernel or the
-device.
-
-A healthy verification reports:
-
-```text
-PHASE=3.1
-RESULT=INJECTION_VERIFIED
-RESTART_TRIGGERED_BY_MODULE=0
-TARGETED_ZYGOTE_RESTART_USED=0
-GLOBAL_SOFT_REBOOT_USED_BY_MODULE=0
-MONITOR_HEALTHY=1
-RUNTIME_PROP_INJECTED=1
-RUNTIME_PROP_DAEMON_RUNNING=1
-CP64_SOCKET_READY=1
-LIBRARY_MAPPED_IN_ZYGOTE=1
-```
-
-When the monitor is healthy but a fresh zygote has not yet been created, the
-verifier reports `WAITING_FOR_KERNELSU_SOFT_REBOOT` instead of initiating any
-restart.
-
-## Why the runtime lives under `/dev`
-
-Samsung DEFEX rejected the live zygote opening `libzygisk.so` from the
-persistent `/data/adb` module path. This fork stages the runtime atomically at:
+Samsung DEFEX rejected the live zygote opening `libzygisk.so` from the persistent
+`/data/adb` module path. The runtime library and sockets are staged atomically
+under the kernel-backed tmpfs path:
 
 ```text
 /dev/.neozygisk
 ```
 
-The location is an existing kernel-backed tmpfs and was validated on the target
-firmware. The persistent module remains under `/data/adb/modules/zygisksu`; only
-the live runtime library and sockets are placed under `/dev`.
+The persistent module remains under `/data/adb/modules/zygisksu`.
 
-## Important safety boundary
+## Safety boundary
 
-A targeted `setprop ctl.restart zygote` experiment reproduced Samsung's
-**Device Services Uninstalled** failure state and required a full reboot. That
-activation path was withdrawn and is rejected by the release workflow.
+The module does not initiate:
 
-Packaged scripts are checked to contain none of the following:
+- KernelSU Soft Reboot;
+- targeted zygote or Android userspace restart;
+- device reboot;
+- `ctl start` recovery of an existing unhealthy monitor;
+- process killing or destructive cleanup.
 
-- `ksud soft-reboot`;
-- `ctl.restart` or `setprop ctl.restart`;
-- device reboot commands;
-- `SIGKILL`, `kill -9` or destructive recovery;
-- automatic verification from `post-fs-data.sh` or `service.sh`.
+A prior targeted `setprop ctl.restart zygote` experiment reproduced Samsung's
+**Device Services Uninstalled** failure state and remains permanently withdrawn.
 
-Use the KernelSU Manager Soft Reboot button only after the simple exploit has
-established a clean KernelSU session.
+## Provider compatibility
 
-## Zygisk provider compatibility
+Install exactly one provider. Do not install this module beside Zygisk Next,
+ReZygisk, or another Zygisk provider.
 
-Do not install this module beside Zygisk Next, ReZygisk or another Zygisk
-provider. Providers compete for the same zygote lifecycle and may share module
-IDs or tracing resources.
+## Releases
 
-This fork preserves NeoZygisk's Zygisk API, module loading, namespace handling,
-trace cleaning and DenyList behavior. It changes only the runtime location,
-post-boot monitor bootstrap and read-only health verification needed by the
-temporary-KernelSU environment.
-
-## Release integrity
-
-The release workflow builds only the release module, validates the packaged
-scripts and native paths, rejects restart/destructive commands, verifies the ZIP
-with `unzip -t`, and publishes the raw installable ZIP plus a checksum whose
-recorded filename is the release basename. No Actions artifact wrapper is
-published.
+Push and pull-request workflows build and validate without uploading an Actions
+artifact and without publishing a release. Publishing the raw installable module
+ZIP and portable SHA-256 file requires an explicit manually approved workflow
+dispatch after hardware validation.
 
 ## Related repositories
 
 - [Root My Galaxy S938B](https://github.com/igorcv88/Root-My-Galaxy-S938B)
 - [Root My Galaxy Payloads S938B](https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B)
 - [Upstream NeoZygisk](https://github.com/JingMatrix/NeoZygisk)
-
-## Upstream NeoZygisk overview
-
-NeoZygisk is a Zygote injection module implemented with `ptrace`. It provides
-Zygisk API support for KernelSU and APatch and can replace Magisk's built-in
-Zygisk. Its primary features include API compatibility, trace cleaning,
-DenyList-aware mount namespace handling and module loading through the zygote
-lifecycle.
-
-For KernelSU or APatch, configure per-application unmounting through the root
-manager's **Umount modules** option. Do not combine multiple independent
-DenyList implementations without testing their namespace behavior.
 
 Use this software only on devices you own or are explicitly authorized to test.
