@@ -1,0 +1,5 @@
+conclusion=failure
+run_id=30563302099
+head_sha=74864914540e00ae425ac4db2a8d90c728cfdd6c
+event=push
+url=https://github.com/igorcv88/NeoZygisk-PostBoot/actions/runs/30563302099
