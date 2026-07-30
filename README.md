@@ -1,43 +1,127 @@
-# NeoZygisk
+# NeoZygisk PostBoot
 
-NeoZygisk is a Zygote injection module, implemented via [`ptrace`](https://man7.org/linux/man-pages/man2/ptrace.2.html), that provides Zygisk API support for APatch and KernelSU.
-It also functions as a powerful replacement for Magisk's built-in Zygisk.
+NeoZygisk PostBoot is a hardware-validated fork of NeoZygisk for temporary
+KernelSU sessions on the Samsung Galaxy S25 Ultra `SM-S938B` running
+`S938BXXSBCZG3`.
 
-## Core Principles
+[Download the latest installable module ZIP](https://github.com/igorcv88/NeoZygisk-PostBoot/releases/latest)
 
-NeoZygisk is engineered with four key objectives:
+The release asset is the raw KernelSU/APatch/Magisk module ZIP itself. The
+workflow does not wrap it inside a GitHub Actions artifact archive.
 
-1.  **API Compatibility:** Maintains full API compatibility with [Magisk's built-in Zygisk](https://github.com/topjohnwu/Magisk/tree/master/native/src/core/zygisk). The relevant API designs are mirrored in the source folder [injector](https://github.com/JingMatrix/NeoZygisk/tree/master/loader/src/injector) for reference.
-2.  **Minimalist Design:** Focuses on a lean and efficient implementation of the Zygisk API, avoiding feature bloat to ensure stability and performance.
-3.  **Trace Cleaning:** Guarantees the complete removal of its injection traces from application processes once all Zygisk modules are unloaded.
-4.  **Advanced Stealth:** Employs a sophisticated DenyList to provide granular control over root and module visibility, effectively hiding the traces of your root solution.
+## Validated device
 
-## The DenyList Explained
+```text
+Build:  BP4A.251205.006.S938BXXSBCZG3
+Kernel: 6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
+Root:   temporary KernelSU loaded by Root My Galaxy
+```
 
-Modern systemless root solutions operate by creating overlay filesystems using [`mount`](https://man7.org/linux/man-pages/man8/mount.8.html) rather than directly modifying system partitions. The DenyList is a core feature designed to hide these modifications by precisely controlling the [mount namespaces](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html) for each application process.
+Hardware validation confirmed:
 
-Here is how NeoZygisk manages visibility for different application states:
+- one NeoZygisk monitor attached to PID 1;
+- init's `TracerPid` matching the monitor PID;
+- an injected `zygote64` and running `zygiskd64`;
+- Zygisk Assistant and LSPosed modules loaded;
+- `/dev/.neozygisk/cp64.sock` available;
+- `/dev/.neozygisk/lib64/libzygisk.so` mapped in the live zygote;
+- the Android activity service healthy.
 
-| Application State | Mount Namespace Visibility | Description & Use Case |
-| :--- | :--- | :--- |
-| **Granted Root Privileges** | Root Solution Mounts + Module Mounts | For trusted applications that require full root access to function correctly (e.g., advanced file managers). |
-| **On DenyList** | Clean, Unmodified Mount Namespace | Provides a pristine environment for applications that perform root detection. The app's root privileges might be revoked, and all traces of root and module mounts are hidden. |
+## Installation and activation
 
-To achieve a clean mount namespace for applications on the DenyList, NeoZygisk employs two distinct strategies: a primary, aggressive approach and a reliable fallback.
+1. Run the simple exploit from
+   [Root My Galaxy S938B](https://github.com/igorcv88/Root-My-Galaxy-S938B)
+   and confirm that KernelSU is active.
+2. Install this module from KernelSU Manager.
+3. Install or enable dependent modules such as Zygisk Assistant and LSPosed.
+4. Use **Soft Reboot** from KernelSU Manager exactly once.
+5. After Android returns, open the NeoZygisk module Action page or run:
 
-1.  **Direct Zygote Unmounting (Primary Strategy)**
-    As an experimental feature for bypassing advanced detection, NeoZygisk attempts to unmount all root-related traces directly from the zygote process itself. This cleans the environment *before* an application process is fully specialized, offering a potentially more robust hiding mechanism. To ensure system stability, this operation is only performed after a strict safety check. If a module is providing critical system resources (e.g., an overlay in `/product`), this direct unmount is aborted to prevent a zygote crash.
+```sh
+su -c '/system/bin/sh /data/adb/modules/zygisksu/postboot-activate.sh verify'
+su -c '/system/bin/sh /data/adb/modules/zygisksu/postboot-activate.sh status'
+```
 
-2.  **Namespace Switching (Fallback Strategy)**
-    If the direct unmount strategy is aborted for safety, or if any traces failed to unmount, NeoZygisk reverts to its standard, reliable method. After an app process forks, the `setns` syscall is used to switch it into a cached, completely clean mount namespace, effectively isolating it from all system modifications.
+The helper name is retained for compatibility, but Phase 3.1 is read-only. The
+module itself does not restart zygote, Android userspace, the kernel or the
+device.
 
-## Configuration
+A healthy verification reports:
 
-To configure the DenyList for a specific application, use the appropriate setting within your root management app:
+```text
+PHASE=3.1
+RESULT=INJECTION_VERIFIED
+RESTART_TRIGGERED_BY_MODULE=0
+TARGETED_ZYGOTE_RESTART_USED=0
+GLOBAL_SOFT_REBOOT_USED_BY_MODULE=0
+MONITOR_HEALTHY=1
+RUNTIME_PROP_INJECTED=1
+RUNTIME_PROP_DAEMON_RUNNING=1
+CP64_SOCKET_READY=1
+LIBRARY_MAPPED_IN_ZYGOTE=1
+```
 
-*   **For APatch/KernelSU:** Enable the **`Umount modules`** option for your target application.
-*   **For Magisk:** Use the **`Configure DenyList`** menu.
+When the monitor is healthy but a fresh zygote has not yet been created, the
+verifier reports `WAITING_FOR_KERNELSU_SOFT_REBOOT` instead of initiating any
+restart.
 
-> **Important Note for Magisk Users**
->
-> The **`Enforce DenyList`** option in Magisk enables Magisk's *own* DenyList implementation. This is separate from NeoZygisk's functionality, is not guaranteed to hide all mount-related traces, and may conflict with NeoZygisk's hiding mechanisms. It is strongly recommended to leave this option disabled and rely solely on NeoZygisk's configuration.
+## Why the runtime lives under `/dev`
+
+Samsung DEFEX rejected the live zygote opening `libzygisk.so` from the
+persistent `/data/adb` module path. This fork stages the runtime atomically at:
+
+```text
+/dev/.neozygisk
+```
+
+The location is an existing kernel-backed tmpfs and was validated on the target
+firmware. The persistent module remains under `/data/adb/modules/zygisksu`; only
+the live runtime library and sockets are placed under `/dev`.
+
+## Important safety boundary
+
+A targeted `setprop ctl.restart zygote` experiment reproduced Samsung's
+**Device Services Uninstalled** failure state and required a full reboot. That
+activation path was withdrawn and is rejected by the release workflow.
+
+Packaged scripts are checked to contain none of the following:
+
+- `ksud soft-reboot`;
+- `ctl.restart` or `setprop ctl.restart`;
+- device reboot commands;
+- `SIGKILL`, `kill -9` or destructive recovery;
+- automatic verification from `post-fs-data.sh` or `service.sh`.
+
+Use the KernelSU Manager Soft Reboot button only after the simple exploit has
+established a clean KernelSU session.
+
+## Zygisk provider compatibility
+
+Do not install this module beside Zygisk Next, ReZygisk or another Zygisk
+provider. Providers compete for the same zygote lifecycle and may share module
+IDs or tracing resources.
+
+This fork preserves NeoZygisk's Zygisk API, module loading, namespace handling,
+trace cleaning and DenyList behavior. It changes only the runtime location,
+post-boot monitor bootstrap and read-only health verification needed by the
+temporary-KernelSU environment.
+
+## Related repositories
+
+- [Root My Galaxy S938B](https://github.com/igorcv88/Root-My-Galaxy-S938B)
+- [Root My Galaxy Payloads S938B](https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B)
+- [Upstream NeoZygisk](https://github.com/JingMatrix/NeoZygisk)
+
+## Upstream NeoZygisk overview
+
+NeoZygisk is a Zygote injection module implemented with `ptrace`. It provides
+Zygisk API support for KernelSU and APatch and can replace Magisk's built-in
+Zygisk. Its primary features include API compatibility, trace cleaning,
+DenyList-aware mount namespace handling and module loading through the zygote
+lifecycle.
+
+For KernelSU or APatch, configure per-application unmounting through the root
+manager's **Umount modules** option. Do not combine multiple independent
+DenyList implementations without testing their namespace behavior.
+
+Use this software only on devices you own or are explicitly authorized to test.

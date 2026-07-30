@@ -1,31 +1,32 @@
-name: CI
+name: Build and publish NeoZygisk PostBoot
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ master ]
-    tags: [ v* ]
-  pull_request:
-  merge_group:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: neozygisk-postboot-release
+  cancel-in-progress: false
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
 
     steps:
-      # ====================================================================
-      # 1. SETUP ENVIRONMENT
-      # ====================================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: "recursive"
-          fetch-depth: 0 # Needed for versioning from git history
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
-          distribution: "temurin"
+          distribution: temurin
           java-version: "21"
 
       - name: Setup Android SDK
@@ -40,12 +41,9 @@ jobs:
           rustup target add armv7-linux-androideabi
 
       - name: Install cargo-ndk
-        # The zygiskd build invokes `cargo ndk` to cross-compile the daemon.
-        # Intentionally unpinned: the build uses the `--platform` flag, which is
-        # stable across cargo-ndk releases. See the commit message for the caveat.
         run: cargo install cargo-ndk --locked
 
-      - name: Setup Ccache for faster builds
+      - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: ${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/build.gradle.kts') }}
@@ -55,51 +53,120 @@ jobs:
         with:
           workspaces: zygiskd -> build/rust/target
 
-      # ====================================================================
-      # 2. CONFIGURE AND BUILD
-      # ====================================================================
-      - name: Build with Gradle
-        run: ./gradlew zipRelease zipDebug -Porg.gradle.parallel=true -Porg.gradle.vfs.watch=true -Dorg.gradle.jvmargs=-Xmx2048m
-
-      # ====================================================================
-      # 3. PREPARE AND UPLOAD ARTIFACTS
-      # ====================================================================
-      - name: Prepare build artifacts
-        if: success()
-        id: prepare_artifacts
+      - name: Build release module ZIP
         run: |
-          RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip')
-          DEBUG_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-debug.zip')
+          chmod +x gradlew
+          ./gradlew zipRelease \
+            -Porg.gradle.parallel=true \
+            -Porg.gradle.vfs.watch=true \
+            -Dorg.gradle.jvmargs=-Xmx2048m
 
-          RELEASE_NAME=$(basename "$RELEASE_ZIP" .zip)
-          DEBUG_NAME=$(basename "$DEBUG_ZIP" .zip)
+      - name: Verify restart-free PostBoot module
+        run: |
+          set -eu
+          RELEASE_ZIP=$(find module/build/outputs/release -type f -name 'NeoZygisk-v*-release.zip' | head -n 1)
+          test -n "$RELEASE_ZIP"
+          rm -rf release-check
+          mkdir release-check
+          unzip -q "$RELEASE_ZIP" -d release-check
 
-          echo "RELEASE_NAME=${RELEASE_NAME}" >> $GITHUB_OUTPUT
-          echo "DEBUG_NAME=${DEBUG_NAME}" >> $GITHUB_OUTPUT
+          test -f release-check/postboot-bootstrap.sh
+          test -f release-check/postboot-activate.sh
+          grep -F 'WORK=/dev/.neozygisk' release-check/postboot-bootstrap.sh
+          grep -F 'WORK=/dev/.neozygisk' release-check/postboot-activate.sh
+          grep -F 'STAGE_ERROR=' release-check/postboot-bootstrap.sh
+          grep -F 'postboot-bootstrap.sh" ensure' release-check/post-fs-data.sh
+          grep -F 'postboot-bootstrap.sh" ensure' release-check/service.sh
+          grep -F "extract \"\$ZIPFILE\" 'postboot-bootstrap.sh'" release-check/customize.sh
+          grep -F "extract \"\$ZIPFILE\" 'postboot-activate.sh'" release-check/customize.sh
+          grep -F 'id=zygisksu' release-check/module.prop
 
-          unzip "$RELEASE_ZIP" -d "release-artifact"
-          unzip "$DEBUG_ZIP" -d "debug-artifact"
+          grep -F 'write_status INJECTION_VERIFIED' release-check/postboot-activate.sh
+          grep -F 'WAITING_FOR_KERNELSU_SOFT_REBOOT' release-check/postboot-activate.sh
+          grep -F 'RESTART_TRIGGERED_BY_MODULE=0' release-check/postboot-activate.sh
+          grep -F 'TARGETED_ZYGOTE_RESTART_USED=0' release-check/postboot-activate.sh
+          grep -F 'GLOBAL_SOFT_REBOOT_USED_BY_MODULE=0' release-check/postboot-activate.sh
+          grep -F 'MANUAL_KERNELSU_SOFT_REBOOT_REQUIRED=1' release-check/postboot-activate.sh
+          grep -F 'LIBRARY_MAPPED_IN_ZYGOTE=' release-check/postboot-activate.sh
+          grep -F '"$VERIFY" verify' release-check/action.sh
 
-      - name: Upload Release Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.prepare_artifacts.outputs.RELEASE_NAME }}
-          path: release-artifact/
+          if grep -F 'postboot-activate.sh' release-check/post-fs-data.sh release-check/service.sh; then
+            echo 'Read-only verification must not run automatically from service scripts.' >&2
+            exit 1
+          fi
 
-      - name: Upload Debug Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.prepare_artifacts.outputs.DEBUG_NAME }}
-          path: debug-artifact/
+          for script in release-check/*.sh; do
+            sh -n "$script"
+          done
 
-      - name: Upload Release Symbols
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-symbols
-          path: zygiskd/build/symbols/release/
+          for binary in release-check/lib/*/libzygisk_ptrace.so; do
+            strings "$binary" | grep -F '/dev/.neozygisk'
+          done
 
-      - name: Upload Debug Symbols
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-symbols
-          path: zygiskd/build/symbols/debug/
+          if grep -R -a -F '/data/adb/neozygisk' release-check; then
+            echo 'Legacy /data/adb/neozygisk runtime path remains in the module.' >&2
+            exit 1
+          fi
+
+          if grep -R -a -F '/debug_ramdisk/neozygisk' release-check; then
+            echo 'Unavailable /debug_ramdisk runtime path remains in the module.' >&2
+            exit 1
+          fi
+
+          if grep -R -a -F '/system/bin/awk' release-check/*.sh; then
+            echo 'A packaged script depends on awk, which is unavailable on the target.' >&2
+            exit 1
+          fi
+
+          if grep -R -a -E 'ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart|/system/bin/reboot|svc[[:space:]]+power[[:space:]]+reboot' release-check/*.sh; then
+            echo 'A packaged script can initiate a forbidden restart.' >&2
+            exit 1
+          fi
+
+          if grep -R -a -E 'SIGKILL|kill[[:space:]]+-9|ctl\.stop|setprop[[:space:]]+ctl\.stop' release-check/*.sh; then
+            echo 'The module contains destructive recovery or process killing.' >&2
+            exit 1
+          fi
+
+          sha256sum "$RELEASE_ZIP" | tee "${RELEASE_ZIP}.sha256"
+          RELEASE_FILE=$(basename "$RELEASE_ZIP")
+          RELEASE_STEM=${RELEASE_FILE%.zip}
+          RELEASE_TAG=${RELEASE_STEM#NeoZygisk-}
+          echo "RELEASE_ZIP=$RELEASE_ZIP" >> "$GITHUB_ENV"
+          echo "RELEASE_FILE=$RELEASE_FILE" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+
+      - name: Publish the raw module ZIP to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cat > release-notes.md <<EOF
+          Hardware-validated NeoZygisk PostBoot release for temporary KernelSU sessions on the Samsung Galaxy S25 Ultra SM-S938B / S938BXXSBCZG3.
+
+          Validated lifecycle:
+          1. run the simple Root My Galaxy exploit;
+          2. install or enable this module and dependent Zygisk modules;
+          3. use Soft Reboot from KernelSU Manager once;
+          4. use the module Action button for read-only verification.
+
+          The module does not call KernelSU soft reboot, targeted zygote restart, device reboot, or destructive recovery commands.
+
+          Source commit: ${GITHUB_SHA}
+          EOF
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_ZIP" "${RELEASE_ZIP}.sha256" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_FILE" \
+              --notes-file release-notes.md \
+              --latest
+          else
+            gh release create "$RELEASE_TAG" \
+              "$RELEASE_ZIP" \
+              "${RELEASE_ZIP}.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_FILE" \
+              --notes-file release-notes.md \
+              --latest
+          fi
