@@ -3,5 +3,5 @@ name=${moduleName}
 version=${versionName}
 versionCode=${versionCode}
 author=JingMatrix, maintained by igorcv88
-description=Experimental PostBoot build with DEFEX-safe ramdisk staging and idempotent monitor bootstrap.
+description=Experimental PostBoot build with DEFEX-safe /dev tmpfs staging and idempotent monitor bootstrap.
 updateJson=${updateJson}
