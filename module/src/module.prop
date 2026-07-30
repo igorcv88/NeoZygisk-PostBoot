@@ -3,5 +3,5 @@ name=${moduleName}
 version=${versionName}
 versionCode=${versionCode}
 author=JingMatrix, maintained by igorcv88
-description=Experimental PostBoot build with DEFEX-safe /dev runtime, idempotent monitor bootstrap, and read-only verification after an external KernelSU Manager Soft Reboot.
+description=Hardware-validated PostBoot build with a DEFEX-safe /dev runtime, idempotent monitor bootstrap, and restart-free verification after an external KernelSU Manager Soft Reboot.
 updateJson=${updateJson}
