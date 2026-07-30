@@ -87,16 +87,14 @@ jobs:
           grep -F 'MONITOR_EXE_DELETED=' release-check/postboot-bootstrap.sh
           grep -F 'MONITOR_BINARY_MATCH=' release-check/postboot-bootstrap.sh
           grep -F 'RUNTIME_LIBRARY_MATCH=' release-check/postboot-bootstrap.sh
+          grep -F '[ "$MONITOR_EXE_DELETED" -eq 0 ] || return 1' release-check/postboot-bootstrap.sh
+          grep -F '[ "$MONITOR_BINARY_MATCH" -eq 1 ] || return 1' release-check/postboot-bootstrap.sh
+          grep -F '[ "$RUNTIME_LIBRARY_MATCH" -eq 1 ] || return 1' release-check/postboot-bootstrap.sh
           grep -F 'update_requires_full_reboot' release-check/customize.sh
           grep -F 'FULL_REBOOT_REQUIRED=' release-check/postboot-activate.sh
           grep -F 'status) status_live' release-check/postboot-activate.sh
           grep -F 'if [ "$ARCH" != "arm64" ]' release-check/customize.sh
           grep -F 'id=zygisksu' release-check/module.prop
-
-          if grep -F '"$TRACER"|"$TRACER (deleted)"' release-check/postboot-bootstrap.sh; then
-            echo 'A deleted monitor executable is still accepted as reusable.' >&2
-            exit 1
-          fi
 
           if grep -R -a -E 'ctl[[:space:]]+start|ksud[[:space:]]+soft-reboot|ctl\.restart|setprop[[:space:]]+ctl\.restart|/system/bin/reboot|svc[[:space:]]+power[[:space:]]+reboot|SIGKILL|kill[[:space:]]+-9|ctl\.stop|setprop[[:space:]]+ctl\.stop' release-check/*.sh; then
             echo 'A packaged script can restart, resume, kill, or perform destructive recovery.' >&2
