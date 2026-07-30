@@ -16,7 +16,9 @@ val gitCommitHash = "git rev-parse --verify --short HEAD".execute()
 val moduleId by extra("zygisksu")
 val moduleName by extra("NeoZygisk")
 val verName by extra("v2.3-postboot.3.2")
-val verCode by extra(gitCommitCount)
+// Keep fork releases monotonically newer than the hardware-tested recovery build
+// (versionCode 347) and than earlier upstream-derived commit-count versions.
+val verCode by extra(10000 + gitCommitCount)
 val commitHash by extra(gitCommitHash)
 val minAPatchVersion by extra(10762)
 val minKsuVersion by extra(10940)
