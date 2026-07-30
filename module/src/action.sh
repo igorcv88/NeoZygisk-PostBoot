@@ -11,6 +11,6 @@ echo
 echo "=== Recent bootstrap log ==="
 tail -n 80 /data/local/tmp/neozygisk-postboot.log 2>/dev/null || echo "No bootstrap log recorded"
 
-if [[ -z "$MMRL" ]] && ([[ -n "$KSU" ]] || [[ -n "$APATCH" ]]); then
+if [ -z "${MMRL:-}" ] && { [ -n "${KSU:-}" ] || [ -n "${APATCH:-}" ]; }; then
   sleep 5
 fi
