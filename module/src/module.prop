@@ -3,5 +3,5 @@ name=${moduleName}
 version=${versionName}
 versionCode=${versionCode}
 author=JingMatrix, maintained by igorcv88
-description=PostBoot RC with DEFEX-safe /dev runtime, live generation checks, stale-status prevention, and full-reboot fail-closed handling after provider updates or zygote crashes.
+description=Hardware-validated PostBoot build with the v3.0 native implementation, DEFEX-safe /dev runtime, live same-generation checks, stale-status prevention, and full-reboot fail-closed handling after provider updates or zygote crashes.
 updateJson=${updateJson}
