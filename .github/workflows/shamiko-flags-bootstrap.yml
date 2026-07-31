@@ -1,0 +1,128 @@
+name: Bootstrap Shamiko flags diagnostic patch
+
+on:
+  push:
+    branches:
+      - agent/shamiko-kernelsu-flags
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout diagnostic branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/shamiko-kernelsu-flags
+          fetch-depth: 0
+
+      - name: Apply source and CI changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          module = Path("loader/src/injector/module.cpp")
+          text = module.read_text()
+
+          old_flags = "uint32_t ZygiskModule::getFlags() { return g_ctx ? (g_ctx->info_flags & ~PRIVATE_MASK) : 0; }"
+          new_flags = '''uint32_t ZygiskModule::getFlags() {
+              if (g_ctx == nullptr) return 0;
+
+              const uint32_t raw_flags = g_ctx->info_flags;
+              if (g_ctx->flags & SERVER_FORK_AND_SPECIALIZE) {
+                  LOGI("system_server getFlags: raw=0x%08x manager=%d apatch=%d ksu=%d magisk=%d",
+                       raw_flags, !!(raw_flags & PROCESS_IS_MANAGER),
+                       !!(raw_flags & PROCESS_ROOT_IS_APATCH),
+                       !!(raw_flags & PROCESS_ROOT_IS_KSU),
+                       !!(raw_flags & PROCESS_ROOT_IS_MAGISK));
+              }
+
+              // Shamiko and other root-aware Zygisk modules use the provider-specific
+              // high bits to distinguish Magisk, KernelSU and APatch. NeoZygisk already
+              // computes these flags in zygiskd, so preserve them at the module API boundary.
+              return raw_flags;
+          }'''
+          if old_flags not in text:
+              raise SystemExit("getFlags baseline not found")
+          text = text.replace(old_flags, new_flags, 1)
+
+          old_server = '''void ZygiskContext::server_specialize_pre() {
+              run_modules_pre();
+              zygiskd::SystemServerStarted();
+          }'''
+          new_server = '''void ZygiskContext::server_specialize_pre() {
+              // App specialization populates info_flags before loading modules, but the
+              // system_server path previously left it at zero. Root-aware modules commonly
+              // perform their environment check from system_server, so query zygiskd first.
+              if (info_flags == 0) {
+                  info_flags = zygiskd::GetProcessFlags(args.server->uid);
+              }
+              LOGI("system_server provider flags: raw=0x%08x uid=%d",
+                   info_flags, static_cast<int>(args.server->uid));
+              run_modules_pre();
+              zygiskd::SystemServerStarted();
+          }'''
+          if old_server not in text:
+              raise SystemExit("server_specialize_pre baseline not found")
+          text = text.replace(old_server, new_server, 1)
+          module.write_text(text)
+
+          gradle = Path("build.gradle.kts")
+          text = gradle.read_text()
+          old_version = 'val verName by extra("v2.3-postboot.3.2")'
+          new_version = 'val verName by extra("v2.3-postboot.3.2-shamiko-flags1")'
+          if old_version not in text:
+              raise SystemExit("version baseline not found")
+          gradle.write_text(text.replace(old_version, new_version, 1))
+
+          ci = Path(".github/workflows/ci.yml")
+          text = ci.read_text()
+          old_allow = "README\\.md|build\\.gradle\\.kts|docs/.*|module/build\\.gradle\\.kts"
+          new_allow = "README\\.md|build\\.gradle\\.kts|docs/.*|loader/src/injector/module\\.cpp|module/build\\.gradle\\.kts"
+          if old_allow not in text:
+              raise SystemExit("native drift allowlist baseline not found")
+          text = text.replace(old_allow, new_allow, 1)
+
+          old_version_check = "grep -F 'version=v2.3-postboot.3.2' release-check/module.prop"
+          new_version_check = "grep -F 'version=v2.3-postboot.3.2-shamiko-flags1' release-check/module.prop"
+          if old_version_check not in text:
+              raise SystemExit("CI version check baseline not found")
+          text = text.replace(old_version_check, new_version_check, 1)
+
+          marker = '''          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+
+      - name: Publish approved raw module ZIP to GitHub Releases'''
+          upload = '''          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+
+      - name: Upload diagnostic module ZIP
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: neozygisk-shamiko-flags-${{ github.sha }}
+          path: |
+            ${{ env.RELEASE_ZIP }}
+            ${{ env.RELEASE_ZIP }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish approved raw module ZIP to GitHub Releases'''
+          if marker not in text:
+              raise SystemExit("artifact insertion marker not found")
+          ci.write_text(text.replace(marker, upload, 1))
+
+          Path(".github/workflows/shamiko-flags-bootstrap.yml").unlink()
+          PY
+
+      - name: Commit diagnostic implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add loader/src/injector/module.cpp build.gradle.kts .github/workflows/ci.yml .github/workflows/shamiko-flags-bootstrap.yml
+          git commit -m "Expose KernelSU flags to Zygisk modules"
+          git push origin HEAD:agent/shamiko-kernelsu-flags
