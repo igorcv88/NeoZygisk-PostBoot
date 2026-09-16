@@ -32,6 +32,63 @@ val workDirectory by extra("/dev/.neozygisk")
 // Fork builds must not be silently replaced by the upstream update channel.
 val updateJson by extra("")
 
+// Diagnostic branch only: patch the native source in the Actions checkout before
+// compilation. This keeps master and the hardware-validated source generation
+// untouched while testing the Shamiko/KernelSU provider-flags hypothesis.
+run {
+    val sourceFile = file("loader/src/injector/module.cpp")
+    var source = sourceFile.readText()
+
+    val oldGetFlags =
+        "uint32_t ZygiskModule::getFlags() { return g_ctx ? (g_ctx->info_flags & ~PRIVATE_MASK) : 0; }"
+    val newGetFlags = """
+        uint32_t ZygiskModule::getFlags() {
+            if (g_ctx == nullptr) return 0;
+
+            const uint32_t raw_flags = g_ctx->info_flags;
+            if (g_ctx->flags & SERVER_FORK_AND_SPECIALIZE) {
+                LOGI("system_server getFlags: raw=0x%08x manager=%d apatch=%d ksu=%d magisk=%d",
+                     raw_flags, !!(raw_flags & PROCESS_IS_MANAGER),
+                     !!(raw_flags & PROCESS_ROOT_IS_APATCH),
+                     !!(raw_flags & PROCESS_ROOT_IS_KSU),
+                     !!(raw_flags & PROCESS_ROOT_IS_MAGISK));
+            }
+
+            // Root-aware modules such as Shamiko use the provider-specific high
+            // bits to distinguish Magisk, KernelSU and APatch.
+            return raw_flags;
+        }
+    """.trimIndent()
+
+    check(source.contains(oldGetFlags)) { "getFlags diagnostic patch baseline not found" }
+    source = source.replace(oldGetFlags, newGetFlags, ignoreCase = false)
+
+    val oldServer = """
+        void ZygiskContext::server_specialize_pre() {
+            run_modules_pre();
+            zygiskd::SystemServerStarted();
+        }
+    """.trimIndent()
+    val newServer = """
+        void ZygiskContext::server_specialize_pre() {
+            // The app path populates info_flags before loading modules, while the
+            // system_server path previously left it at zero. Shamiko performs its
+            // environment check from system_server.
+            if (info_flags == 0) {
+                info_flags = zygiskd::GetProcessFlags(args.server->uid);
+            }
+            LOGI("system_server provider flags: raw=0x%08x uid=%d",
+                 info_flags, static_cast<int>(args.server->uid));
+            run_modules_pre();
+            zygiskd::SystemServerStarted();
+        }
+    """.trimIndent()
+
+    check(source.contains(oldServer)) { "server_specialize_pre diagnostic patch baseline not found" }
+    source = source.replace(oldServer, newServer, ignoreCase = false)
+    sourceFile.writeText(source)
+}
+
 val androidMinSdkVersion by extra(26)
 val androidTargetSdkVersion by extra(36)
 val androidCompileSdkVersion by extra(36)

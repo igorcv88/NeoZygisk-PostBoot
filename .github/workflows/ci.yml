@@ -143,6 +143,17 @@ jobs:
           echo "RELEASE_FILE=$RELEASE_FILE" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
+      - name: Upload diagnostic module ZIP
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: neozygisk-shamiko-kernelsu-flags-${{ github.sha }}
+          path: |
+            ${{ env.RELEASE_ZIP }}
+            ${{ env.RELEASE_ZIP }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Publish approved raw module ZIP to GitHub Releases
         if: >-
           (github.event_name == 'workflow_dispatch' && inputs.publish) ||
