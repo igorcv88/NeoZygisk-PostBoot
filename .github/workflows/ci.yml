@@ -36,8 +36,12 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Verify hosted Android SDK
+        run: |
+          test -d "$ANDROID_HOME"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" "platform-tools"
 
       - name: Setup Rust toolchain
         run: |
@@ -67,7 +71,7 @@ jobs:
           git cat-file -e "${KNOWN_GOOD_NATIVE_BASELINE}^{commit}"
 
           git diff --name-only "$KNOWN_GOOD_NATIVE_BASELINE" "$GITHUB_SHA" > changed-from-baseline.txt
-          grep -Ev '^($|\.github/release-status/.*|\.github/workflows/(ci\.yml|record-approved-release\.yml)|README\.md|build\.gradle\.kts|docs/.*|module/build\.gradle\.kts|module/src/(action\.sh|customize\.sh|module\.prop|post-fs-data\.sh|postboot-activate\.sh|postboot-bootstrap\.sh|service\.sh|uninstall\.sh))$' \
+          grep -Ev '^($|\.github/FUNDING\.yml|\.github/release-status/.*|\.github/workflows/(ci\.yml|record-approved-release\.yml)|README\.md|build\.gradle\.kts|docs/.*|module/build\.gradle\.kts|module/src/(action\.sh|customize\.sh|module\.prop|post-fs-data\.sh|postboot-activate\.sh|postboot-bootstrap\.sh|service\.sh|uninstall\.sh))$' \
             changed-from-baseline.txt > unexpected-native-drift.txt || true
 
           if [ -s unexpected-native-drift.txt ]; then
